@@ -2,7 +2,7 @@
 <html lang="sr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content, viewport-fit=cover">
 <meta name="mobile-web-app-capable" content="yes">
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#28402F" id="metaThemeColor">
@@ -554,6 +554,19 @@ input::selection, textarea::selection{ background:color-mix(in srgb, var(--frame
 .rok-pick{ display:flex; gap:10px; }
 .rok-pick select:first-child{ flex:1.5; min-width:0; }
 .rok-pick select:last-child{ flex:1; min-width:0; }
+
+/* v44: prikaz do donje ivice ekrana (viewport-fit=cover, kao Glasovni prevodilac) — donja Android traka pokazuje boju stranice,
+   pa prati temu. Bezbedni razmaci da sadržaj ne ode ispod sistemskih traka (env() je 0 gde traka ne smeta). */
+#app{ padding-bottom:calc(40px + env(safe-area-inset-bottom,0px)); }
+.topbar{ padding-top:calc(16px + env(safe-area-inset-top,0px)); }
+:is([data-theme="banka"],[data-theme="crna"],[data-theme="koza"]) .topbar{ padding-top:calc(14px + env(safe-area-inset-top,0px)); }
+#statusBanner{ padding-top:calc(13px + env(safe-area-inset-top,0px)); }
+#undoToast{ bottom:calc(96px + env(safe-area-inset-bottom,0px)); }
+.chat-header{ padding-top:calc(14px + env(safe-area-inset-top,0px)); }
+.chat-input-row{ padding-bottom:calc(11px + env(safe-area-inset-bottom,0px)); }
+.crop-header{ padding-top:calc(16px + env(safe-area-inset-top,0px)); }
+.photo-full-close{ top:calc(18px + env(safe-area-inset-top,0px)); }
+.form-full .ff-head{ padding-top:calc(14px + env(safe-area-inset-top,0px)); }
 </style>
 </head>
 <body>
@@ -1231,7 +1244,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 43; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 44; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 const GEMINI_MODEL = 'gemini-3.5-flash-lite';
 const GEMINI_MODEL_SEARCH = 'gemini-3.5-flash';
 let internetSearchLoadingId = null;
