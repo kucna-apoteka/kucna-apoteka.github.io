@@ -1244,9 +1244,14 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 44; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
-const GEMINI_MODEL = 'gemini-3.5-flash-lite';
-const GEMINI_MODEL_SEARCH = 'gemini-3.5-flash';
+const APP_VERSION = 45; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+/* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
+   (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
+   pretragu interneta (google_search). */
+const GEMINI_MODEL = 'gemini-3.5-flash-lite';          // AI unos (tekst, slika, uputstvo)
+const GEMINI_MODEL_BACKUP = 'gemini-3.6-flash';
+const GEMINI_MODEL_SEARCH = 'gemini-3.6-flash';        // AI čet i pretraga interneta
+const GEMINI_MODEL_SEARCH_BACKUP = 'gemini-3.5-flash-lite';
 let internetSearchLoadingId = null;
 let formDraft = null;
 let formEditId = null;
@@ -1495,30 +1500,15 @@ async function askAIAboutMedicines(question, history){
 
   const history_parts = (history||[]).filter(m=>!m.thinking).map(m=>({ role: m.role==='user'?'user':'model', parts:[{text:m.text}] }));
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(()=>controller.abort(), 25000);
-  let resp;
-  try{
-    resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL_SEARCH+':generateContent', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'x-goog-api-key':apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: sys }] },
-        contents: [...history_parts, { role:'user', parts:[{ text: question }] }],
-        generationConfig: { maxOutputTokens: 3500, temperature: 0.2 }
-      }),
-      signal: controller.signal
-    });
-  } catch(fetchErr){
-    clearTimeout(timeoutId);
-    if(fetchErr.name==='AbortError') throw new Error('Server nije odgovorio na vreme. Probaj ponovo.');
-    throw new Error('Ne mogu da se povežem sa AI servisom: '+fetchErr.message);
-  }
-  clearTimeout(timeoutId);
+  /* v45: bez temperature — modeli 3.6+ je zvanično ignorišu i najavljena je greška 400 (troubleshooting, 13.10.2026). */
+  const resp = await geminiFetch([GEMINI_MODEL_SEARCH, GEMINI_MODEL_SEARCH_BACKUP], {
+    systemInstruction: { parts: [{ text: sys }] },
+    contents: [...history_parts, { role:'user', parts:[{ text: question }] }],
+    generationConfig: { maxOutputTokens: 3500 }
+  }, 25000);
   if(!resp.ok){
     const errBody = await resp.text().catch(()=> '');
-    if(resp.status===401) throw new Error('Google nije prihvatio ključ (401 - neautorizovan). Proveri da li si ključ tačno nalepio u Podešavanjima, ili napravi nov ključ na aistudio.google.com.');
-    throw new Error('Gemini API greška ('+resp.status+'): '+errBody.slice(0,180));
+    throw geminiHttpError(resp.status, errBody);
   }
   const data = await resp.json();
   const candidate = data.candidates && data.candidates[0];
@@ -1583,27 +1573,37 @@ function aiFormatStatusHtml(){
   if(st.mode!=='format' && st.reasons && st.reasons.length) txt += ' razlog: '+st.reasons.join(' | ');
   return '<div class="field-hint" id="aiFormatHint" style="margin-top:14px;">'+escapeHtml(txt)+'</div>';
 }
-async function geminiStructuredRequest(sys, parts, schema, maxOutputTokens, timeoutMs){
+/* v45: zajednički poziv Gemini-ja sa ponavljanjem (zvanično, ai.google.dev troubleshooting „Retry strategy“: ponavljati samo
+   408, 429 i 5xx, sa rastućim čekanjem i malo nasumičnog odstupanja; 400/402/403 se ne ponavljaju).
+   Redosled: glavni model → posle ~1 s opet glavni → posle ~2 s rezervni → posle ~4 s opet rezervni.
+   Vraća odgovor (resp) čim stigne nešto što nije privremena greška; inače jasna poruka na srpskom. */
+const GEMINI_RETRY_STATUS = [408,429,500,502,503,504];
+function geminiPause(ms){ return new Promise(r=>setTimeout(r, ms + Math.floor(Math.random()*400))); }
+function geminiErrorText(body){
+  try{ const j = JSON.parse(body); if(j && j.error && j.error.message) return String(j.error.message); }catch(e){}
+  return String(body||'');
+}
+function geminiHttpError(status, body){
+  if(status===401) return new Error('Google nije prihvatio ključ (401 - neautorizovan). Proveri da li si ključ tačno nalepio u Podešavanjima, ili napravi nov ključ na aistudio.google.com.');
+  if(status===400 && /API key/i.test(body)) return new Error('Gemini API ključ nije važeći. Proveri ga u Podešavanjima.');
+  return new Error('Gemini greška ('+status+'): '+geminiErrorText(body).slice(0,200));
+}
+async function geminiFetch(models, body, timeoutMs){
   const apiKey = getApiKey();
-  const attempts = [
-    { mode:'format', gc:{ responseFormat:{ text:{ mimeType:'APPLICATION_JSON', schema: schema } }, maxOutputTokens: maxOutputTokens } },
-    { mode:'jsonSchema', gc:{ responseMimeType:'application/json', responseJsonSchema: schema, maxOutputTokens: maxOutputTokens } },
-    { mode:'bez', gc:{ responseMimeType:'application/json', maxOutputTokens: maxOutputTokens } }
-  ];
-  const rejections = [];
-  let resp, usedMode = '';
-  for(let i=0; i<attempts.length; i++){
+  const plan = [[models[0],0],[models[0],1000],[models[1],2000],[models[1],4000]];
+  let lastStatus = 0;
+  for(let i=0; i<plan.length; i++){
+    const model = plan[i][0];
+    if(!model) continue;
+    if(plan[i][1]) await geminiPause(plan[i][1]);
     const controller = new AbortController();
     const timeoutId = setTimeout(()=>controller.abort(), timeoutMs);
+    let resp;
     try{
-      resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent', {
+      resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent', {
         method:'POST',
         headers:{ 'Content-Type':'application/json', 'x-goog-api-key':apiKey },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: sys }] },
-          contents: [{ role:'user', parts: parts }],
-          generationConfig: attempts[i].gc
-        }),
+        body: JSON.stringify(body),
         signal: controller.signal
       });
     } catch(fetchErr){
@@ -1612,17 +1612,34 @@ async function geminiStructuredRequest(sys, parts, schema, maxOutputTokens, time
     } finally {
       clearTimeout(timeoutId);
     }
+    if(GEMINI_RETRY_STATUS.indexOf(resp.status) < 0) return resp;
+    lastStatus = resp.status;
+    await resp.text().catch(()=> '');
+  }
+  if(lastStatus===429) throw new Error('Google AI je trenutno odbio zahtev zbog ograničenja broja zahteva na tvom nalogu. Sačekaj malo pa probaj ponovo.');
+  throw new Error('Google AI je trenutno preopterećen. Aplikacija je pokušala 4 puta, i sa rezervnim modelom. Probaj ponovo za par minuta.');
+}
+async function geminiStructuredRequest(sys, parts, schema, maxOutputTokens, timeoutMs){
+  const attempts = [
+    { mode:'format', gc:{ responseFormat:{ text:{ mimeType:'APPLICATION_JSON', schema: schema } }, maxOutputTokens: maxOutputTokens } },
+    { mode:'jsonSchema', gc:{ responseMimeType:'application/json', responseJsonSchema: schema, maxOutputTokens: maxOutputTokens } },
+    { mode:'bez', gc:{ responseMimeType:'application/json', maxOutputTokens: maxOutputTokens } }
+  ];
+  const rejections = [];
+  let resp, usedMode = '';
+  for(let i=0; i<attempts.length; i++){
+    resp = await geminiFetch([GEMINI_MODEL, GEMINI_MODEL_BACKUP], {
+      systemInstruction: { parts: [{ text: sys }] },
+      contents: [{ role:'user', parts: parts }],
+      generationConfig: attempts[i].gc
+    }, timeoutMs);
     if(resp.ok){ usedMode = attempts[i].mode; break; }
     const errBody = await resp.text().catch(()=> '');
-    if(resp.status===400 && /API key/i.test(errBody)) throw new Error('Gemini API ključ nije važeći. Proveri ga u Podešavanjima.');
-    if(resp.status===401) throw new Error('Google nije prihvatio ključ (401 - neautorizovan). Proveri da li si ključ tačno nalepio u Podešavanjima, ili napravi nov ključ na aistudio.google.com.');
-    if(resp.status===400 && i < attempts.length-1){
-      let msg = errBody;
-      try{ const j = JSON.parse(errBody); if(j && j.error && j.error.message) msg = j.error.message; }catch(e){}
-      rejections.push(String(msg).slice(0,300));
+    if(resp.status===400 && !/API key/i.test(errBody) && i < attempts.length-1){
+      rejections.push(geminiErrorText(errBody).slice(0,300));
       continue;
     }
-    throw new Error('Gemini API greška ('+resp.status+'): '+errBody.slice(0,180));
+    throw geminiHttpError(resp.status, errBody);
   }
   saveAiFormatStatus(usedMode, rejections);
   const data = await resp.json();
@@ -1703,46 +1720,36 @@ function setRokPart(){
   formDraft.rok = (rokPartM && rokPartY) ? rokPartY+'-'+rokPartM : '';
 }
 /* ---------- Pouzdano brisanje u poljima forme (Android Chrome + Gboard) ----------
-   Preneto iz aplikacija Stanje guma i Cenovnik (proveren kod).
-   fieldOriginal: poznata DOBRA vrednost polja, upisana pri svakom iscrtavanju forme
-   (polja se tada prave iznova, pa i kada AI popuni podatke sa slike).
-   pristineArmed: polja čiji je sadržaj upravo označen tapom, a još nije menjan. */
+   v45: polje se ponaša kao svako obično polje — dodir postavi kursor, Backspace briše slovo po slovo, delimična izmena radi
+   (do v44 dodir je označavao ceo tekst, a Backspace se blokirao i skakao na prethodno polje dok se ne ukuca slovo).
+   Zaštita ostaje samo za slučaj kad je CEO tekst označen (npr. dugi pritisak → „Izaberi sve“): Gboard na „obriši“ ponekad
+   skine samo kraj označenog teksta. fieldOriginal (WeakMap) pamti vrednost u trenutku kad je ceo tekst označen; ako posle
+   brisanja ostane samo početak te vrednosti, polje se isprazni — kako je korisnik i hteo. Isto kao preimenovanje u prevodiocu v91. */
 const fieldOriginal = new WeakMap();
-const pristineArmed = new WeakSet();
-function snapshotField(el){ fieldOriginal.set(el, el.value); }
-function handleFocusSelect(el){ el.select(); pristineArmed.add(el); }
-function wireBackspace(el, prev, onRestore){
+function fieldFullySelected(el){ return el.value !== '' && el.selectionStart === 0 && el.selectionEnd === el.value.length; }
+function wireBackspace(el, onFix){
   if(!el) return;
-  const goPrev = ()=>{ if(prev) prev.focus(); };
-  el.addEventListener('focus', ()=> handleFocusSelect(el));
-  el.addEventListener('keydown', (e)=>{
-    if(e.key !== 'Backspace') return;
-    if(el.value === '' || pristineArmed.has(el)){ e.preventDefault(); goPrev(); }
-  });
-  el.addEventListener('beforeinput', (e)=>{
-    if(e.inputType !== 'deleteContentBackward') return;
-    if(el.value === '' || pristineArmed.has(el)){ e.preventDefault(); goPrev(); }
-  });
-  el.addEventListener('input', ()=>{
-    if(!pristineArmed.has(el)) return;
-    let original = fieldOriginal.get(el);
-    if(typeof original !== 'string') original = '';
-    const trimmed = el.value.length < original.length && original.indexOf(el.value) === 0;
-    if(trimmed){
-      el.value = original;
-      if(onRestore) onRestore();   // vraća i formDraft na dobru vrednost
-      goPrev();
-      return;
+  let armed = false;
+  const arm = ()=>{ if(fieldFullySelected(el)){ fieldOriginal.set(el, el.value); armed = true; } else armed = false; };
+  el.addEventListener('select', arm);
+  el.addEventListener('click', ()=> setTimeout(arm, 0));
+  el.addEventListener('beforeinput', arm);
+  el.addEventListener('input', (ev)=>{
+    if(!armed) return;
+    armed = false;
+    if(!ev.inputType || ev.inputType.indexOf('delete') !== 0) return;
+    const original = fieldOriginal.get(el);
+    if(typeof original === 'string' && el.value !== '' && el.value.length < original.length && original.indexOf(el.value) === 0){
+      el.value = '';
+      if(onFix) onFix();
     }
-    pristineArmed.delete(el);
   });
 }
 function wireFormFields(){
   const n = document.getElementById('fNaziv'), t = document.getElementById('fTip'), k = document.getElementById('fKategorija');
-  [n,t,k].forEach(el=>{ if(el) snapshotField(el); });
-  wireBackspace(n, null, ()=>updateDraft('naziv', n.value));
-  wireBackspace(t, n,    ()=>updateDraft('tip', t.value));
-  wireBackspace(k, t,    ()=>updateDraft('kategorija', k.value));
+  wireBackspace(n, ()=>updateDraft('naziv', n.value));
+  wireBackspace(t, ()=>updateDraft('tip', t.value));
+  wireBackspace(k, ()=>updateDraft('kategorija', k.value));
 }
 function renderItemForm(){
   const cats = knownCategories();
@@ -2200,30 +2207,14 @@ async function callGeminiWebSearch(naziv, tip){
     '. Odgovori na srpskom jeziku, kratko i jasno (najviše 5 rečenica): za šta se koristi, uobičajeno doziranje, i najvažnija upozorenja/kontraindikacije. '+
     'Ako ne možeš pouzdano da identifikuješ tačno ovaj proizvod na internetu, jasno to reci umesto da izmišljaš podatke.';
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(()=>controller.abort(), 25000);
-  let resp;
-  try{
-    resp = await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL_SEARCH+':generateContent', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', 'x-goog-api-key':apiKey },
-      body: JSON.stringify({
-        contents: [{ role:'user', parts: [{ text: sys }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: { maxOutputTokens: 1200, temperature: 0.2 }
-      }),
-      signal: controller.signal
-    });
-  } catch(fetchErr){
-    clearTimeout(timeoutId);
-    if(fetchErr.name==='AbortError') throw new Error('Server nije odgovorio na vreme. Probaj ponovo.');
-    throw new Error('Ne mogu da se povežem sa AI servisom: '+fetchErr.message);
-  }
-  clearTimeout(timeoutId);
+  const resp = await geminiFetch([GEMINI_MODEL_SEARCH, GEMINI_MODEL_SEARCH_BACKUP], {
+    contents: [{ role:'user', parts: [{ text: sys }] }],
+    tools: [{ google_search: {} }],
+    generationConfig: { maxOutputTokens: 1200 }
+  }, 25000);
   if(!resp.ok){
     const errBody = await resp.text().catch(()=> '');
-    if(resp.status===401) throw new Error('Google nije prihvatio ključ (401 - neautorizovan). Proveri da li si ključ tačno nalepio u Podešavanjima, ili napravi nov ključ na aistudio.google.com.');
-    throw new Error('Gemini API greška ('+resp.status+'): '+errBody.slice(0,180));
+    throw geminiHttpError(resp.status, errBody);
   }
   const data = await resp.json();
   const candidate = data.candidates && data.candidates[0];
@@ -2392,7 +2383,8 @@ function openHelpScreen(){
     { t:'Šta ističe uskoro', c:'Zvonce gore, pored podešavanja: crveni broj na njemu kaže koliko lekova ističe ili je već isteklo. Dodir na zvonce prikazuje samo njih; ponovni dodir ili korak nazad vraća sve. Koliko dana unapred te upozorava podešava se u ovom istom meniju (Podešavanja).' },
     { t:'Pretraga i sortiranje', c:'"Pretraži" pretražuje naziv, tip, kategoriju i napomenu — ignoriše veliko/malo slovo i kvačice. "Sortiraj" nudi Naziv / Kategorija / Tip / Datum isteka; kod Kategorije i Tipa se pojave i grupni naslovi.' },
     { t:'Prikaz liste', c:'Ikonica ▦/☰ menja prikaz između liste (detaljnije) i mreže (kompaktnije, dve kolone). Klik na sliku leka otvara je preko celog ekrana; klik na ostatak kartice otvara detalje.' },
-    { t:'AI ćaskanje', c:'Dugme "AI" gore — postavi pitanje o svojoj apoteci ("Šta imam za glavobolju?", "Šta mi ističe?"). AI može i da predloži izmenu ili brisanje, ali ništa se ne menja dok sam ne potvrdiš.' },
+    { t:'AI ćaskanje', c:'Dugme "AI" gore — postavi pitanje o svojoj apoteci ("Šta imam za glavobolju?", "Šta mi ističe?"). AI može i da predloži izmenu ili brisanje, ali ništa se ne menja dok sam ne potvrdiš. Kad je Google AI preopterećen, aplikacija sama ponovi zahtev i proba rezervni model; ako ni to ne uspe, kaže ti da probaš za par minuta.' },
+    { t:'Izmena podataka leka', c:'Polja se menjaju kao svuda na telefonu: dodirni tamo gde želiš da kucaš ili brišeš. Da zameniš ceo tekst, drži prst na polju i izaberi "Izaberi sve", pa kucaj ili obriši.' },
     { t:'Spisak za kupovinu', c:'Dugme "Kupovina" otvara spisak (tačka na njemu znači da nešto treba kupiti) — može da se doda bilo šta, čak i ono čega još nema u apoteci. Kvačica označava kupljeno, "🧹 Očisti kupljeno" briše sve kupljeno odjednom.' },
     { t:'Brzi meni', c:'Dug pritisak (drži prst) na kartici leka otvara brzi meni — dodaj na spisak za kupovinu ili obriši, bez da prvo ulaziš u detalje.' },
     { t:'Ako pogrešiš', c:'Brisanje stavke uvek nudi "Poništi" na par sekundi posle brisanja — ako pogrešiš, odmah se vraća.' }
