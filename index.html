@@ -204,6 +204,12 @@
   .modal-actions button{ flex:1; padding:13px; border-radius:13px; border:none; font-size:14.5px; font-weight:700; cursor:pointer; }
   .cancel-btn{ background:var(--bg-elevated); color:var(--text); }
   .save-btn{ background:linear-gradient(150deg, var(--green), var(--green-deep)); color:var(--on-accent); }
+  /* v53: broj dana sa „Sačuvaj“ pored polja (kao prevodilac v99); boje dugmeta iz .save-btn svake teme */
+  .save-row{ display:flex; gap:8px; align-items:stretch; }
+  .save-row input{ flex:1; min-width:0; }
+  .set-body .save-mini{ flex:none; padding:0 18px; border:none; border-radius:11px; font-size:14.5px; font-weight:700; font-family:inherit; cursor:pointer; }
+  .set-body .save-mini:disabled{ opacity:.35; pointer-events:none; }
+  .days-err{ display:none; font-size:12.5px; font-weight:600; color:var(--coral); margin-top:5px; }
   .delete-btn{ background:var(--coral); color:var(--on-danger); }
 
   /* ---- Detail overlay ---- */
@@ -754,11 +760,6 @@ function backupReminderHtml(){
     '<span>'+escapeHtml(msg)+'</span>'+
     '<button onclick="exportBackup()">izvezi bekap</button>'+
     '</div>';
-}
-function saveBackupInterval(val){
-  const n = parseInt(val) || 7;
-  setBackupIntervalDays(n);
-  render();
 }
 function persistItems(){ lsSet('apoteka:items', JSON.stringify(items)); }
 function loadItems(){
@@ -1347,7 +1348,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 52; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 53; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -2438,6 +2439,36 @@ function renderSettingsTiles(){
     settingsTile('🔑','Gemini API ključ', getApiKey() ? 'Ključ je unet' : 'Ključ nije unet','openSettingsSub(\'apikey\')')+
     settingsTile('🗑','Korpa', trashTileSub(),'openTrashScreen()'));
 }
+/* v53 — broj dana (upozorenje, bekap, korpa) čuva se SAMO dugmetom „Sačuvaj“ pored polja ili Enter-om, uz obaveštenje gore
+   (zajedničko pravilo, prevodilac v99; Zoran 14.10.: tiho čuvanje na svaku cifru zbunjuje). Dugme je bledo dok broj nije nov i
+   ispravan (1–365). Izlazak bez čuvanja ne menja ništa: ekran se pri sledećem ulasku crta iz sačuvane vrednosti.
+   Gboard zaštita ostaje wireBackspace (v47), uvezana u setSettingsView. */
+function daysFieldHtml(id, val){
+  return '<div class="save-row"><input type="text" id="'+id+'" inputmode="numeric" maxlength="3" enterkeyhint="done" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value="'+val+'">'+
+    '<button type="button" class="save-btn save-mini" id="'+id+'Save" disabled>Sačuvaj</button></div>'+
+    '<div class="days-err" id="'+id+'Err">Upiši broj od 1 do 365.</div>';
+}
+function wireDaysField(id, getSaved, apply, noteText){
+  const input = document.getElementById(id), btn = document.getElementById(id+'Save'), err = document.getElementById(id+'Err');
+  if(!input || !btn || !err) return;
+  const check = ()=>{
+    const raw = input.value.trim();
+    const ok = /^[0-9]+$/.test(raw) && +raw >= 1 && +raw <= 365;
+    btn.disabled = !(ok && +raw !== getSaved());
+    err.style.display = (raw !== '' && !ok) ? 'block' : 'none';
+  };
+  const save = ()=>{
+    if(btn.disabled) return;
+    const n = +input.value.trim();
+    apply(n);
+    input.value = String(n); input.blur(); check();
+    showNote(noteText(n));
+  };
+  input.addEventListener('input', check);
+  input.addEventListener('keydown', (e)=>{ if(e.key === 'Enter'){ e.preventDefault(); save(); } });
+  btn.addEventListener('click', save);
+  check();
+}
 function openSettingsSub(key){
   if(!settingsCloseFn || settingsSubFn) return;
   const NUM = 'inputmode="numeric" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"';
@@ -2445,9 +2476,8 @@ function openSettingsSub(key){
   if(key==='expiry'){
     title='Upozorenje o isteku';
     body='<div class="field"><label>Upozori me koliko dana pre isteka roka</label>'+
-      '<input id="sThreshold" type="text" '+NUM+' value="'+settings.expiryThresholdDays+'"></div>'+
-      '<div class="field-hint" style="margin-bottom:18px;">Lekovi i suplementi čiji rok ističe unutar ovog broja dana pojaviće se u traci "Ističe uskoro" na početnom ekranu.</div>'+
-      '<div class="modal-actions"><button class="save-btn" onclick="saveExpirySetting()">Sačuvaj</button></div>';
+      daysFieldHtml('sThreshold', settings.expiryThresholdDays)+'</div>'+
+      '<div class="field-hint">Lekovi i suplementi čiji rok ističe unutar ovog broja dana broje se na zvoncu gore na početnom ekranu.</div>';
   } else if(key==='theme'){
     title='Tema';
     body='<div id="themeOptList">'+themeOptionsHtml()+'</div>';
@@ -2460,17 +2490,23 @@ function openSettingsSub(key){
       '<input type="file" id="backupFileInput" accept=".json" style="display:none" onchange="handleImportFile(this)">'+
       '<div class="field-hint" id="lastBackupHint">Poslednji bekap: '+lastBackupDisplay()+'</div>'+
       '<div class="field" style="margin-top:14px;"><label>Podseti me na svakih (dana) bez bekapa</label>'+
-      '<input type="text" id="backupIntervalInput" '+NUM+' value="'+getBackupIntervalDays()+'" oninput="saveBackupInterval(this.value)"></div>'+
+      daysFieldHtml('backupIntervalInput', getBackupIntervalDays())+'</div>'+
       '<div class="field-hint">Kad prođe ovoliko dana od poslednjeg bekapa, gore na vrhu će se pojaviti podsetnik.</div>';
   } else if(key==='apikey'){
     title='Gemini API ključ';
     body='<div class="field"><label>Google Gemini API ključ</label>'+
-      '<input id="sApiKey" type="password" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value="'+escapeHtml(getApiKey())+'" placeholder="AIza..."></div>'+
+      '<input id="sApiKey" type="password" enterkeyhint="done" onkeydown="if(event.key===\'Enter\'){ event.preventDefault(); saveApiKeySetting(); }" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value="'+escapeHtml(getApiKey())+'" placeholder="AIza..."></div>'+
       '<div class="field-hint" style="margin-bottom:18px;">Ključ se čuva samo na ovom telefonu, u ovom pregledaču. Napraviš ga besplatno na aistudio.google.com (bez kartice) → Get API key. Potreban je da bi čitanje fotografije pakovanja radilo.</div>'+
       '<div class="modal-actions"><button class="save-btn" onclick="saveApiKeySetting()">Sačuvaj</button></div>'+
       aiFormatStatusHtml();
   } else return;
   setSettingsView(title, body);
+  if(key==='expiry') wireDaysField('sThreshold', ()=>settings.expiryThresholdDays,
+    (n)=>{ settings.expiryThresholdDays = n; persistSettings(); render(); },
+    (n)=>'Sačuvano: upozorenje '+n+' '+daniRec(n)+' pre isteka');
+  if(key==='backup') wireDaysField('backupIntervalInput', getBackupIntervalDays,
+    (n)=>{ setBackupIntervalDays(n); render(); },
+    (n)=>'Sačuvano: podsetnik na svakih '+n+' '+daniRec(n));
   settingsSubFn = ()=>{ settingsSubFn=null; renderSettingsTiles(); };
   pushOverlay(settingsSubFn);
 }
@@ -2482,7 +2518,6 @@ let trashSel = new Set();
 function getTrash(){ const v = lsGet(TRASH_KEY); try{ const a = v && v.value ? JSON.parse(v.value) : []; return Array.isArray(a) ? a : []; }catch(e){ return []; } }
 function setTrash(list){ try{ localStorage.setItem(TRASH_KEY, JSON.stringify(list)); return true; }catch(e){ return false; } }
 function getTrashDays(){ const v = lsGet(TRASH_DAYS_KEY); const n = v ? parseInt(v.value) : NaN; return n > 0 ? n : 30; }
-function saveTrashDays(v){ const n = parseInt(String(v).replace(/\D/g,'')); if(n && n > 0){ lsSet(TRASH_DAYS_KEY, String(n)); renderTrashList(); } }
 function trashAdd(it){
   const list = getTrash().filter(x=>x.id!==it.id);
   list.push({ id: it.id, deletedAt: Date.now(), item: JSON.parse(JSON.stringify(it)) });
@@ -2501,10 +2536,13 @@ function openTrashScreen(){
   trashSel = new Set();
   const NUM = 'inputmode="numeric" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"';
   setSettingsView('Korpa',
-    '<div class="field"><label>Čuvaj obrisano (dana)</label><input type="text" id="trashDaysInput" '+NUM+' value="'+getTrashDays()+'" oninput="saveTrashDays(this.value)"></div>'+
+    '<div class="field"><label>Čuvaj obrisano (dana)</label>'+daysFieldHtml('trashDaysInput', getTrashDays())+'</div>'+
     '<div class="field-hint" style="margin-bottom:14px;">Obrisani lekovi čekaju ovde toliko dana, pa se sami trajno brišu.</div>'+
     '<div id="trashList"></div>');
   wireBackspace(document.getElementById('trashDaysInput'), null);
+  wireDaysField('trashDaysInput', getTrashDays,
+    (n)=>{ lsSet(TRASH_DAYS_KEY, String(n)); renderTrashList(); },
+    (n)=>'Sačuvano: korpa čuva '+n+' '+daniRec(n));
   const sc = document.getElementById('settingsScreen');
   const bar = document.createElement('div'); bar.className = 'trash-bar'; bar.id = 'trashBar';
   bar.innerHTML = '<button type="button" class="trash-restore" id="trashRestoreBtn" onclick="trashRestoreSelected()"></button>'+
@@ -2581,16 +2619,11 @@ function closeSettings(){
   settingsCloseFn();
   if(levels){ suppressPopstateCount++; try{ history.go(-levels); }catch(e){ suppressPopstateCount--; } }
 }
-function saveExpirySetting(){
-  const v = parseInt(document.getElementById('sThreshold').value)||60;
-  settings.expiryThresholdDays = v;
-  persistSettings();
-  render();
-  settingsBack();
-}
 function saveApiKeySetting(){
-  setApiKey(document.getElementById('sApiKey').value.trim());
+  const v = document.getElementById('sApiKey').value.trim();
+  setApiKey(v);
   settingsBack();
+  showNote(v ? 'Ključ sačuvan' : 'Ključ obrisan');
 }
 let helpCloseFn = null;
 function openHelpScreen(){
@@ -2608,7 +2641,8 @@ function openHelpScreen(){
     { t:'Brzi meni', c:'Dug pritisak (drži prst) na kartici leka otvara brzi meni — dodaj na spisak za kupovinu ili obriši, bez da prvo ulaziš u detalje.' },
     { t:'Obaveštenja', c:'Sve poruke aplikacije pojavljuju se gore, u okviru sa velikim slovima: zeleno kad je nešto urađeno, crveno kad nešto nije uspelo. Ekran se spusti ispod okvira, pa ništa nije prekriveno. Okvir nestane sam (posle 4 sekunde, greška posle 6).' },
     { t:'Brisanje prevlačenjem', c:'U prikazu spiska povuci karticu leka prstom ulevo: ispod nje se pojavi crveno dugme "Izbriši". Dodir na njega traži potvrdu, pa lek ide u korpu. Dodir bilo gde drugde vraća karticu na mesto.' },
-    { t:'Korpa', c:'Obrisan lek ide u korpu (Podešavanja → Korpa) i tamo čeka zadati broj dana (podrazumevano 30), pa se sam trajno briše. U korpi dodirom izabereš lekove, pa "Vrati" (vraća ih u apoteku sa svim podacima i slikom) ili "Obriši trajno". Korpa ne ulazi u rezervnu kopiju.' }
+    { t:'Korpa', c:'Obrisan lek ide u korpu (Podešavanja → Korpa) i tamo čeka zadati broj dana (podrazumevano 30), pa se sam trajno briše. U korpi dodirom izabereš lekove, pa "Vrati" (vraća ih u apoteku sa svim podacima i slikom) ili "Obriši trajno". Korpa ne ulazi u rezervnu kopiju.' },
+    { t:'Brojevi u podešavanjima', c:'Broj dana (upozorenje o isteku, podsetnik za bekap, korpa) menjaš u polju, pa dodirneš "Sačuvaj" pored njega ili Enter na tastaturi. Gore se pojavi potvrda. Dok broj nije promenjen, "Sačuvaj" je bled. Ako izađeš bez čuvanja, ostaje stari broj. Dozvoljen je broj od 1 do 365. Isto važi za Gemini ključ: čuva se tek dugmetom "Sačuvaj".' }
   ];
   b.innerHTML = '<div class="modal full">'+
     '<button class="modal-close-x" onclick="closeHelpScreen()">✕</button>'+
