@@ -239,9 +239,24 @@
   .backup-reminder-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; background:var(--coral); color:var(--on-danger); font-size:12px; font-weight:600; padding:9px 11px; border-radius:11px; margin-bottom:9px; }
   .backup-reminder-row button{ flex:none; background:rgba(255,255,255,0.2); color:inherit; border:1px solid rgba(255,255,255,0.4); padding:6px 11px; border-radius:8px; font-weight:700; font-size:11.5px; font-family:inherit; cursor:pointer; }
   .photo-full-close{ position:absolute; top:18px; right:18px; width:36px; height:36px; border-radius:50%; background:rgba(255,255,255,0.15); border:none; color:#fff; font-size:16px; cursor:pointer; }
-  #undoToast{ position:fixed; left:14px; right:14px; bottom:96px; max-width:492px; margin:0 auto; z-index:55; background:var(--text); color:var(--on-text); border-radius:13px; padding:12px 14px; display:none; align-items:center; justify-content:space-between; gap:10px; font-size:13px; box-shadow:0 6px 20px rgba(0,0,0,0.25); }
-  #undoToast.show{ display:flex; }
-  #undoToast button{ background:var(--amber); color:var(--on-warn); border:none; border-radius:9px; padding:8px 14px; font-weight:700; font-size:12.5px; cursor:pointer; flex:none; }
+
+  /* ---- v48: korpa (kao Troškovi v11) ---- */
+  .trash-top{ display:flex; justify-content:space-between; align-items:center; margin:4px 2px 8px; }
+  .trash-link{ background:none; border:none; padding:8px 4px; font-family:inherit; font-size:15px; font-weight:700; color:var(--accent); cursor:pointer; }
+  .trash-link.danger{ color:var(--coral); }
+  .trash-item{ display:flex; align-items:center; gap:12px; padding:12px; margin-bottom:8px; border-radius:12px; background:var(--bg-card); border:1px solid var(--line); cursor:pointer; }
+  .trash-item.sel{ border-color:var(--accent); }
+  .trash-check{ width:24px; height:24px; flex:none; box-sizing:border-box; border-radius:7px; border:2px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:800; color:var(--on-accent); }
+  .trash-item.sel .trash-check{ background:var(--accent); border-color:var(--accent); }
+  .trash-tx{ min-width:0; flex:1; }
+  .trash-name{ font-size:16px; font-weight:600; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .trash-sub{ font-size:12.5px; color:var(--text-dim); margin-top:3px; }
+  .trash-bar{ display:none; position:fixed; left:0; right:0; bottom:0; z-index:47; gap:10px; padding:12px 14px calc(14px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line); box-sizing:border-box; }
+  .trash-bar.show{ display:flex; }
+  .settings-screen.has-trash-bar{ padding-bottom:calc(100px + env(safe-area-inset-bottom)); }
+  .trash-bar button{ flex:1; padding:14px 10px; border-radius:12px; font-family:inherit; font-size:15px; font-weight:700; cursor:pointer; }
+  .trash-bar .trash-restore{ background:linear-gradient(150deg, var(--green), var(--green-deep)); border:none; color:var(--on-accent); }
+  .trash-bar .trash-purge{ background:transparent; border:1.5px solid var(--coral); color:var(--coral); }
 
   /* ---- AI Chat ---- */
   .chat-overlay{ position:fixed; inset:0; background:var(--surface); z-index:45; display:flex; flex-direction:column; }
@@ -533,7 +548,6 @@ html[data-theme="ponoc"]{
 [data-theme="ponoc"] .backup-reminder-row{ background:var(--card-shine), var(--bg-card); border:1px solid var(--coral); color:var(--text); }
 [data-theme="ponoc"] .backup-reminder-row button{ background:#000; border:1px solid var(--coral); color:var(--coral); }
 [data-theme="ponoc"] #statusBanner.info{ background:var(--g-grad); color:var(--on-accent); }
-[data-theme="ponoc"] #undoToast{ background:var(--card-shine), var(--bg-card); border:1px solid var(--line); color:var(--text); }
 /* v41: okvir iskačućih prozora u boji teme; polje u fokusu mirno sivo; osenčen označen tekst (kao Troškovi v5) */
 :root{ --frame-acc:var(--green-deep); --focus-line:#A3A7AF; }
 [data-theme="ponoc"]{ --frame-acc:var(--accent); }
@@ -561,7 +575,6 @@ input::selection, textarea::selection{ background:color-mix(in srgb, var(--frame
 .topbar{ padding-top:calc(16px + env(safe-area-inset-top,0px)); }
 :is([data-theme="banka"],[data-theme="crna"],[data-theme="koza"]) .topbar{ padding-top:calc(14px + env(safe-area-inset-top,0px)); }
 #statusBanner{ padding-top:calc(13px + env(safe-area-inset-top,0px)); }
-#undoToast{ bottom:calc(96px + env(safe-area-inset-bottom,0px)); }
 .chat-header{ padding-top:calc(14px + env(safe-area-inset-top,0px)); }
 .chat-input-row{ padding-bottom:calc(11px + env(safe-area-inset-bottom,0px)); }
 .crop-header{ padding-top:calc(16px + env(safe-area-inset-top,0px)); }
@@ -571,7 +584,6 @@ input::selection, textarea::selection{ background:color-mix(in srgb, var(--frame
 </head>
 <body>
 <div id="statusBanner"></div>
-<div id="undoToast"></div>
 <div id="app"></div>
 
 <script>
@@ -771,34 +783,6 @@ function hideBanner(){
   const b = document.getElementById('statusBanner');
   if(b) b.className='';
   clearTimeout(bannerTimeout);
-}
-
-/* ---------- UNDO (poništi brisanje) ---------- */
-let lastDeletedItem = null;
-let undoTimeout = null;
-function showUndoToast(message){
-  const t = document.getElementById('undoToast');
-  if(!t) return;
-  t.className = 'show';
-  t.innerHTML = '<span>'+escapeHtml(message)+'</span><button onclick="performUndo()">Poništi</button>';
-  clearTimeout(undoTimeout);
-  undoTimeout = setTimeout(hideUndoToast, 6000);
-}
-function hideUndoToast(){
-  const t = document.getElementById('undoToast');
-  if(t) t.className = '';
-  clearTimeout(undoTimeout);
-  lastDeletedItem = null;
-}
-function performUndo(){
-  if(!lastDeletedItem) return;
-  items.push(lastDeletedItem);
-  persistItems();
-  lastDeletedItem = null;
-  const t = document.getElementById('undoToast');
-  if(t) t.className = '';
-  clearTimeout(undoTimeout);
-  render();
 }
 
 /* ---------- OVERLAY STACK (da dugme/gest "nazad" zatvara prozorčić umesto da napusti stranicu) ---------- */
@@ -1233,18 +1217,20 @@ function closeExpandedInfo(){
 function confirmDeleteItem(id, swapFromFn){
   showConfirm('Obrisati ovu stavku iz kućne apoteke?', ()=>{
     const it = getItem(id);
-    if(it) lastDeletedItem = JSON.parse(JSON.stringify(it));
+    if(!it) return;
+    /* v48: obrisano ide u korpu. Prvo upis u korpu; ako telefon nema mesta, stavka se NE briše. */
+    if(!trashAdd(it)){ showBanner('Brisanje nije uspelo: na telefonu nema mesta za korpu. Isprazni korpu u Podešavanjima pa probaj ponovo.'); return; }
     items = items.filter(i=>i.id!==id);
     persistItems();
     closeDetail();
     render();
-    if(it) showUndoToast('Stavka "'+it.naziv+'" obrisana.');
+    showBanner('„'+it.naziv+'“ je u korpi.', 'info');
   }, null, swapFromFn);
 }
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 47; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 48; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -2318,7 +2304,8 @@ function openSettings(){
 function setSettingsView(title, bodyHtml){
   const t=document.getElementById('setTitle'), bd=document.getElementById('setBody'), sc=document.getElementById('settingsScreen');
   if(!t || !bd) return;
-  t.textContent = title; bd.innerHTML = bodyHtml; if(sc) sc.scrollTop = 0;
+  t.textContent = title; bd.innerHTML = bodyHtml; if(sc){ sc.scrollTop = 0; sc.classList.remove('has-trash-bar'); }
+  const oldBar = document.getElementById('trashBar'); if(oldBar) oldBar.remove();
   ['sThreshold','backupIntervalInput','sApiKey'].forEach(id=> wireBackspace(document.getElementById(id), null));
 }
 function renderSettingsTiles(){
@@ -2329,7 +2316,8 @@ function renderSettingsTiles(){
     settingsTile('⏰','Upozorenje o isteku', n+' '+daniRec(n)+' pre isteka','openSettingsSub(\'expiry\')')+
     settingsTile('🎨','Tema', themeName(getTheme()),'openSettingsSub(\'theme\')')+
     settingsTile('💾','Rezervna kopija', last ? 'Poslednja: '+lastBackupDisplay() : 'Još nije napravljena','openSettingsSub(\'backup\')')+
-    settingsTile('🔑','Gemini API ključ', getApiKey() ? 'Ključ je unet' : 'Ključ nije unet','openSettingsSub(\'apikey\')'));
+    settingsTile('🔑','Gemini API ključ', getApiKey() ? 'Ključ je unet' : 'Ključ nije unet','openSettingsSub(\'apikey\')')+
+    settingsTile('🗑','Korpa', trashTileSub(),'openTrashScreen()'));
 }
 function openSettingsSub(key){
   if(!settingsCloseFn || settingsSubFn) return;
@@ -2366,6 +2354,101 @@ function openSettingsSub(key){
   setSettingsView(title, body);
   settingsSubFn = ()=>{ settingsSubFn=null; renderSettingsTiles(); };
   pushOverlay(settingsSubFn);
+}
+/* ---------- KORPA (v48, po uzoru na Troškove v11; Zoranova odluka 14.10.: svaka aplikacija ima korpu) ----------
+   Obrisana stavka (cela, sa slikom) čeka u korpi zadati broj dana (podrazumevano 30), zatim se trajno briše pri
+   otvaranju aplikacije i korpe. Korpa NE ide u bekap. Ključevi: apoteka:trash, apoteka:trashDays. */
+const TRASH_KEY = 'apoteka:trash', TRASH_DAYS_KEY = 'apoteka:trashDays';
+let trashSel = new Set();
+function getTrash(){ const v = lsGet(TRASH_KEY); try{ const a = v && v.value ? JSON.parse(v.value) : []; return Array.isArray(a) ? a : []; }catch(e){ return []; } }
+function setTrash(list){ try{ localStorage.setItem(TRASH_KEY, JSON.stringify(list)); return true; }catch(e){ return false; } }
+function getTrashDays(){ const v = lsGet(TRASH_DAYS_KEY); const n = v ? parseInt(v.value) : NaN; return n > 0 ? n : 30; }
+function saveTrashDays(v){ const n = parseInt(String(v).replace(/\D/g,'')); if(n && n > 0){ lsSet(TRASH_DAYS_KEY, String(n)); renderTrashList(); } }
+function trashAdd(it){
+  const list = getTrash().filter(x=>x.id!==it.id);
+  list.push({ id: it.id, deletedAt: Date.now(), item: JSON.parse(JSON.stringify(it)) });
+  return setTrash(list);
+}
+function trashDaysLeft(x){ return Math.max(0, getTrashDays() - Math.floor((Date.now() - x.deletedAt) / 86400000)); }
+function trashPurgeExpired(){
+  const list = getTrash(); const keep = list.filter(x=>trashDaysLeft(x) > 0);
+  if(keep.length !== list.length) setTrash(keep);
+}
+function lekRec(n){ const d=n%10, s=n%100; return (d===1 && s!==11) ? 'lek' : (d>=2 && d<=4 && (s<12 || s>14)) ? 'leka' : 'lekova'; }
+function trashTileSub(){ const n = getTrash().length; return n ? n+' '+lekRec(n)+' u korpi' : 'Prazna'; }
+function openTrashScreen(){
+  if(!settingsCloseFn || settingsSubFn) return;
+  trashPurgeExpired();
+  trashSel = new Set();
+  const NUM = 'inputmode="numeric" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"';
+  setSettingsView('Korpa',
+    '<div class="field"><label>Čuvaj obrisano (dana)</label><input type="text" id="trashDaysInput" '+NUM+' value="'+getTrashDays()+'" oninput="saveTrashDays(this.value)"></div>'+
+    '<div class="field-hint" style="margin-bottom:14px;">Obrisani lekovi čekaju ovde toliko dana, pa se sami trajno brišu.</div>'+
+    '<div id="trashList"></div>');
+  wireBackspace(document.getElementById('trashDaysInput'), null);
+  const sc = document.getElementById('settingsScreen');
+  const bar = document.createElement('div'); bar.className = 'trash-bar'; bar.id = 'trashBar';
+  bar.innerHTML = '<button type="button" class="trash-restore" id="trashRestoreBtn" onclick="trashRestoreSelected()"></button>'+
+    '<button type="button" class="trash-purge" id="trashPurgeBtn" onclick="trashPurgeSelected()"></button>';
+  if(sc) sc.appendChild(bar);
+  renderTrashList();
+  settingsSubFn = ()=>{ settingsSubFn=null; renderSettingsTiles(); };
+  pushOverlay(settingsSubFn);
+}
+function renderTrashList(){
+  const box = document.getElementById('trashList'), bar = document.getElementById('trashBar');
+  if(!box) return;
+  const list = getTrash();
+  trashSel = new Set(Array.from(trashSel).filter(id=>list.some(x=>x.id===id)));
+  const sc = document.getElementById('settingsScreen');
+  const n = trashSel.size;
+  if(bar) bar.classList.toggle('show', n > 0);
+  if(sc) sc.classList.toggle('has-trash-bar', n > 0);
+  if(!list.length){ box.innerHTML = '<div class="field-hint" style="padding-top:10px;">Korpa je prazna.</div>'; return; }
+  const allSel = n === list.length;
+  box.innerHTML = '<div class="trash-top"><button type="button" class="trash-link" onclick="trashToggleAll()">'+(allSel?'Poništi izbor':'Izaberi sve')+'</button>'+
+    '<button type="button" class="trash-link danger" onclick="trashEmptyAll()">Isprazni korpu</button></div>'+
+    list.slice().sort((a,b)=>b.deletedAt-a.deletedAt).map(x=>{
+      const left = trashDaysLeft(x), it = x.item || {};
+      const leftTx = left <= 1 ? 'briše se danas' : 'još '+left+' '+daniRec(left);
+      const sel = trashSel.has(x.id);
+      return '<div class="trash-item'+(sel?' sel':'')+'" data-id="'+escapeHtml(x.id)+'" onclick="trashToggle(this.dataset.id)">'+
+        '<span class="trash-check">'+(sel?'✓':'')+'</span>'+
+        '<div class="trash-tx"><div class="trash-name">'+escapeHtml(it.naziv||'(bez naziva)')+'</div>'+
+        '<div class="trash-sub">'+escapeHtml((it.tip ? it.tip+' · ' : '')+leftTx)+'</div></div></div>';
+    }).join('');
+  const rb = document.getElementById('trashRestoreBtn'), pb = document.getElementById('trashPurgeBtn');
+  if(rb) rb.textContent = 'Vrati ('+n+')';
+  if(pb) pb.textContent = 'Obriši trajno ('+n+')';
+}
+function trashToggle(id){ if(trashSel.has(id)) trashSel.delete(id); else trashSel.add(id); renderTrashList(); }
+function trashToggleAll(){ const list = getTrash(); trashSel = trashSel.size===list.length ? new Set() : new Set(list.map(x=>x.id)); renderTrashList(); }
+function trashRestoreSelected(){
+  const all = getTrash(), chosen = all.filter(x=>trashSel.has(x.id));
+  if(!chosen.length) return;
+  chosen.forEach(x=>{
+    const it = JSON.parse(JSON.stringify(x.item));
+    if(items.some(i=>i.id===it.id)) it.id = 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+    items.push(it);
+  });
+  persistItems();
+  setTrash(all.filter(x=>!trashSel.has(x.id)));
+  trashSel = new Set();
+  render(); renderTrashList();
+  showBanner(chosen.length===1 ? '„'+(chosen[0].item.naziv||'')+'“ je vraćen u apoteku.' : 'Vraćeno u apoteku: '+chosen.length+' '+lekRec(chosen.length)+'.', 'info');
+}
+function trashPurgeSelected(){
+  const n = trashSel.size; if(!n) return;
+  showConfirm('Trajno obrisati izabrano ('+n+')? Ovo se više ne može vratiti.', ()=>{
+    setTrash(getTrash().filter(x=>!trashSel.has(x.id)));
+    trashSel = new Set(); renderTrashList();
+  }, 'Da, obriši trajno');
+}
+function trashEmptyAll(){
+  const n = getTrash().length; if(!n) return;
+  showConfirm('Isprazniti korpu ('+n+' '+lekRec(n)+')? Ovo se više ne može vratiti.', ()=>{
+    setTrash([]); trashSel = new Set(); renderTrashList();
+  }, 'Da, isprazni');
 }
 function settingsBack(){
   if(settingsSubFn){ closeOverlay(settingsSubFn); return; }
@@ -2404,7 +2487,7 @@ function openHelpScreen(){
     { t:'Izmena podataka', c:'Dodir na polje označi ceo tekst: kucanjem ga zameniš. Za izmenu dela teksta dodirni još jednom tamo gde želiš kursor, pa briši ili kucaj normalno. Taster za brisanje na označenom ili praznom polju ne briše, nego te vrati na prethodno polje.' },
     { t:'Spisak za kupovinu', c:'Dugme "Kupovina" otvara spisak (tačka na njemu znači da nešto treba kupiti) — može da se doda bilo šta, čak i ono čega još nema u apoteci. Kvačica označava kupljeno, "🧹 Očisti kupljeno" briše sve kupljeno odjednom.' },
     { t:'Brzi meni', c:'Dug pritisak (drži prst) na kartici leka otvara brzi meni — dodaj na spisak za kupovinu ili obriši, bez da prvo ulaziš u detalje.' },
-    { t:'Ako pogrešiš', c:'Brisanje stavke uvek nudi "Poništi" na par sekundi posle brisanja — ako pogrešiš, odmah se vraća.' }
+    { t:'Korpa', c:'Obrisan lek ide u korpu (Podešavanja → Korpa) i tamo čeka zadati broj dana (podrazumevano 30), pa se sam trajno briše. U korpi dodirom izabereš lekove, pa "Vrati" (vraća ih u apoteku sa svim podacima i slikom) ili "Obriši trajno". Korpa ne ulazi u rezervnu kopiju.' }
   ];
   b.innerHTML = '<div class="modal full">'+
     '<button class="modal-close-x" onclick="closeHelpScreen()">✕</button>'+
@@ -2509,6 +2592,7 @@ loadSettings();
 applyTheme(getTheme());
 loadItems();
 loadShoppingList();
+trashPurgeExpired();
 render();
 
 if('serviceWorker' in navigator){
