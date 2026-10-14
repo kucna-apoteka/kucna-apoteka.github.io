@@ -104,6 +104,9 @@
   /* ---- v41: početni ekran po uzoru na Arhivu ---- */
   .home-head{ display:flex; align-items:center; gap:8px; border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:7px 0; margin-bottom:12px; }
   .home-head .app-title{ flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .home-tt{ flex:1; min-width:0; display:flex; flex-direction:column; }
+  .home-tt .app-title{ flex:none; line-height:1.15; }
+  .home-count{ font-size:12px; font-weight:700; color:var(--text-dim); letter-spacing:0.2px; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .home-mark{ flex:none; width:20px; height:20px; color:var(--amber); display:flex; }
   .home-mark svg, .home-sq svg, .home-sheet svg, .exp-row svg{ display:block; }
   .home-head .icon-btn{ border-radius:50%; }
@@ -506,7 +509,7 @@ html[data-theme="ponoc"]{
 [data-theme="ponoc"] .group-header{ padding:0 6px 4px; margin:4px 0 0; }
 /* kartice lekova: lista je jedan blok sa crnim prorezom od 2 px */
 [data-theme="ponoc"] .med-card{ background:var(--card-shine), var(--bg-card); border:1px solid var(--line); border-radius:0; margin-bottom:2px; }
-[data-theme="ponoc"] .section-label + .med-card, [data-theme="ponoc"] .group-header + .med-card{ border-top-left-radius:14px; border-top-right-radius:14px; }
+[data-theme="ponoc"] .list-area > .med-card:first-child, [data-theme="ponoc"] .group-header + .med-card{ border-top-left-radius:14px; border-top-right-radius:14px; }
 [data-theme="ponoc"] .med-card:has(+ .group-header), [data-theme="ponoc"] .med-card:last-child{ border-bottom-left-radius:14px; border-bottom-right-radius:14px; }
 [data-theme="ponoc"] .grid-card{ background:var(--card-shine), var(--bg-card); border-radius:14px; }
 [data-theme="ponoc"] .med-thumb{ background:rgba(255,255,255,.05); }
@@ -1081,8 +1084,7 @@ function render(){
   if(filtered.length===0){
     listHtml = '<div class="empty">'+(qWords.length ? 'Nema stavki koje odgovaraju pretrazi "'+escapeHtml(searchQuery)+'".' : (expiryOnly ? 'Nijedan lek ne ističe uskoro.' : 'Kućna apoteka je prazna.<br>Dodaj prvi lek ili suplement dugmetom „Dodaj“ gore.'))+'</div>';
   } else if(settings.viewMode==='mreza'){
-    listHtml = '<div class="section-label">'+(expiryOnly?expiryTitle:'Sve stavke')+' ('+filtered.length+')</div>'+
-      '<div class="grid-list">'+
+    listHtml =       '<div class="grid-list">'+
       filtered.map(it=>{
         const s = expiryStatus(it);
         const badgeClass = s.key==='ok' ? 'badge-ok' : s.key==='soon' ? 'badge-soon' : s.key==='expired' ? 'badge-expired' : 'badge-missing';
@@ -1096,8 +1098,7 @@ function render(){
       '</div>';
   } else {
     let lastGroup = null;
-    listHtml = '<div class="section-label">'+(expiryOnly?expiryTitle:'Sve stavke')+' ('+filtered.length+')</div>' +
-      filtered.map(it=>{
+    listHtml =       filtered.map(it=>{
         const s = expiryStatus(it);
         const badgeClass = s.key==='ok' ? 'badge-ok' : s.key==='soon' ? 'badge-soon' : s.key==='expired' ? 'badge-expired' : 'badge-missing';
         const gk = groupKeyForSort(it);
@@ -1116,7 +1117,7 @@ function render(){
     '<div class="topbar">'+
     backupReminderHtml()+
     '<div class="home-head"><span class="home-mark">'+HOME_IC.mark+'</span>'+
-    '<div class="app-title serif">Kućna apoteka</div>'+
+    '<div class="home-tt"><div class="app-title serif">Kućna apoteka</div><div class="home-count">'+(expiryOnly?expiryTitle:'Sve stavke')+' ('+filtered.length+')</div></div>'+
     '<button class="icon-btn" onclick="toggleViewMode()" title="Promeni prikaz">'+(settings.viewMode==='mreza'?ic('☰','list'):ic('▦','grid'))+'</button>'+
     '<button class="icon-btn bell-btn'+(expiryOnly?' bell-on':'')+'" onclick="toggleExpiryOnly()" title="Rokovi" aria-label="Rokovi">'+ic('🔔','bell')+
       (expiring.length>0 ? '<span class="bell-badge">'+expiring.length+'</span>' : '')+'</button>'+
@@ -1278,7 +1279,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 50; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 51; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
