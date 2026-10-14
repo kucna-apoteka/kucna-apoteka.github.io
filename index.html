@@ -145,7 +145,14 @@
   .expiry-chip.expired .ed{ color:var(--coral); }
 
   /* ---- List ---- */
-  .list-area{ padding:0 16px; }
+  .list-area{ padding:0 16px; position:relative; }
+  /* v52: brisanje prevlačenjem ulevo (samo prikaz spisak), kao Arhiva v122: kartica se pomeri, ispod nje crveno „Izbriši“ */
+  .list-area > .med-card{ position:relative; z-index:1; touch-action:pan-y; }
+  .med-card.sw-anim{ transition:transform .2s ease; }
+  .sw-del{ position:absolute; width:96px; box-sizing:border-box; border:none; border-radius:16px; z-index:0;
+    background:#FF0000; color:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px;
+    padding:0 0 0 12px; font-family:inherit; font-size:13px; font-weight:600; cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .sw-del svg{ width:24px; height:24px; }
   .section-label{ font-size:11px; font-weight:700; color:var(--text-dim); letter-spacing:0.2px; padding:4px 2px 6px; }
   .group-header{ background:var(--group-bg); color:var(--group-text); font-size:10.5px; font-weight:700; letter-spacing:0.3px; text-transform:uppercase; padding:6px 11px; border-radius:8px; margin:8px 0 7px; }
   .med-card{ display:flex; align-items:center; gap:12px; background:var(--bg-card); border:1px solid var(--line); border-radius:16px; padding:11px 13px; margin-bottom:9px; cursor:pointer; box-shadow:var(--shadow-card); }
@@ -890,6 +897,65 @@ function startCardLongPress(id){
   }, 500);
 }
 function cancelCardLongPress(){ clearTimeout(cardLongPressTimer); }
+/* v52: brisanje prevlačenjem ulevo, preuzeto iz Arhive v122 (swipeToDelete) */
+const SW_W = 84;
+let _swOpen = null;   /* {tile, del} otvorena kartica */
+function swClose(anim){
+  const o = _swOpen; if(!o) return; _swOpen = null;
+  o.tile._swBase = 0;
+  o.tile.classList.toggle('sw-anim', anim !== false); o.tile.style.transform = '';
+  setTimeout(()=>{ o.del.remove(); o.tile.classList.remove('sw-anim'); }, anim === false ? 0 : 220);
+}
+function swipeToDelete(tile, id){
+  let x0 = 0, y0 = 0, on = false, dx = 0, track = false;
+  const mkDel = ()=>{
+    const d = document.createElement('button');
+    d.type = 'button'; d.className = 'sw-del';
+    d.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"></path><path d="M10 11v6M14 11v6"></path></svg><span>Izbriši</span>';
+    d.style.top = tile.offsetTop + 'px'; d.style.height = tile.offsetHeight + 'px';
+    d.style.left = (tile.offsetLeft + tile.offsetWidth - 96) + 'px';
+    const r = getComputedStyle(tile); d.style.borderRadius = r.borderTopRightRadius + ' ' + r.borderTopRightRadius + ' ' + r.borderBottomRightRadius + ' ' + r.borderBottomRightRadius;
+    d.onclick = (e)=>{ e.stopPropagation(); swClose(); confirmDeleteItem(id); };
+    tile.parentNode.appendChild(d);
+    return d;
+  };
+  tile.addEventListener('pointerdown', (e)=>{ x0 = e.clientX; y0 = e.clientY; dx = 0; on = false; track = true; tile.dataset.suppressClick = ''; });   /* nov dodir: stara zabrana klika ne važi */
+  tile.addEventListener('pointermove', (e)=>{
+    if(!track) return;
+    const mx = e.clientX - x0, my = e.clientY - y0;
+    if(!on){
+      if(Math.abs(mx) < 10 || Math.abs(mx) < Math.abs(my) * 1.5) return;
+      on = true; cancelCardLongPress();
+      if(_swOpen && _swOpen.tile !== tile) swClose();
+      if(!_swOpen) _swOpen = {tile, del: mkDel()};
+      try{ tile.setPointerCapture(e.pointerId); }catch(err){}
+      tile.classList.remove('sw-anim');
+    }
+    dx = Math.max(-SW_W * 1.25, Math.min(0, (tile._swBase || 0) + mx));
+    tile.style.transform = 'translateX(' + dx + 'px)';
+  });
+  tile.addEventListener('pointerup', ()=>{
+    track = false;
+    if(!on) return;
+    on = false; tile.dataset.suppressClick = '1';
+    setTimeout(()=>{ tile.dataset.suppressClick = ''; }, 450);   /* ako posle prevlačenja ne dođe dodir */
+    tile.classList.add('sw-anim');
+    if(dx < -SW_W / 2){ tile.style.transform = 'translateX(' + (-SW_W) + 'px)'; tile._swBase = -SW_W; }
+    else swClose();
+  });
+  tile.addEventListener('pointercancel', ()=>{ if(on){ on = false; track = false; swClose(); } else track = false; });
+  /* posle prevlačenja dodir ne otvara lek; dodir na otvorenu karticu je samo zatvara */
+  tile.addEventListener('click', (e)=>{
+    if(tile.dataset.suppressClick === '1'){ e.stopImmediatePropagation(); e.preventDefault(); tile.dataset.suppressClick = ''; return; }
+    if(_swOpen && _swOpen.tile === tile){ e.stopImmediatePropagation(); e.preventDefault(); swClose(); }
+  }, true);
+}
+/* dodir bilo gde van otvorene kartice je zatvara (bez druge radnje na kartici) */
+document.addEventListener('pointerdown', (e)=>{
+  if(!_swOpen) return;
+  if(e.target.closest('.sw-del') || _swOpen.tile.contains(e.target)) return;
+  swClose();
+}, true);
 function handleCardClick(id){
   if(cardLongPressFired){ cardLongPressFired = false; return; }
   openDetail(id);
@@ -1134,6 +1200,8 @@ function render(){
         '</div>')+
     '</div>'+
     '<div class="list-area">'+listHtml+'</div>';
+  _swOpen = null;
+  if(settings.viewMode!=='mreza') app.querySelectorAll('.list-area > .med-card').forEach(c=>swipeToDelete(c, c.id.slice(5)));
 
   if(searchOpen){
     setTimeout(()=>{ const el=document.getElementById('searchInput'); if(el) el.focus(); }, 30);
@@ -1279,7 +1347,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 51; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 52; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -2539,6 +2607,7 @@ function openHelpScreen(){
     { t:'Spisak za kupovinu', c:'Dugme "Kupovina" otvara spisak (tačka na njemu znači da nešto treba kupiti) — može da se doda bilo šta, čak i ono čega još nema u apoteci. Kvačica označava kupljeno, "🧹 Očisti kupljeno" briše sve kupljeno odjednom.' },
     { t:'Brzi meni', c:'Dug pritisak (drži prst) na kartici leka otvara brzi meni — dodaj na spisak za kupovinu ili obriši, bez da prvo ulaziš u detalje.' },
     { t:'Obaveštenja', c:'Sve poruke aplikacije pojavljuju se gore, u okviru sa velikim slovima: zeleno kad je nešto urađeno, crveno kad nešto nije uspelo. Ekran se spusti ispod okvira, pa ništa nije prekriveno. Okvir nestane sam (posle 4 sekunde, greška posle 6).' },
+    { t:'Brisanje prevlačenjem', c:'U prikazu spiska povuci karticu leka prstom ulevo: ispod nje se pojavi crveno dugme "Izbriši". Dodir na njega traži potvrdu, pa lek ide u korpu. Dodir bilo gde drugde vraća karticu na mesto.' },
     { t:'Korpa', c:'Obrisan lek ide u korpu (Podešavanja → Korpa) i tamo čeka zadati broj dana (podrazumevano 30), pa se sam trajno briše. U korpi dodirom izabereš lekove, pa "Vrati" (vraća ih u apoteku sa svim podacima i slikom) ili "Obriši trajno". Korpa ne ulazi u rezervnu kopiju.' }
   ];
   b.innerHTML = '<div class="modal full">'+
