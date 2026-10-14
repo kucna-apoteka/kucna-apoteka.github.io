@@ -1244,7 +1244,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 45; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 46; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -1719,37 +1719,54 @@ function setRokPart(){
   rokPartY = document.getElementById('fRokY').value;
   formDraft.rok = (rokPartM && rokPartY) ? rokPartY+'-'+rokPartM : '';
 }
-/* ---------- Pouzdano brisanje u poljima forme (Android Chrome + Gboard) ----------
-   v45: polje se ponaša kao svako obično polje — dodir postavi kursor, Backspace briše slovo po slovo, delimična izmena radi
-   (do v44 dodir je označavao ceo tekst, a Backspace se blokirao i skakao na prethodno polje dok se ne ukuca slovo).
-   Zaštita ostaje samo za slučaj kad je CEO tekst označen (npr. dugi pritisak → „Izaberi sve“): Gboard na „obriši“ ponekad
-   skine samo kraj označenog teksta. fieldOriginal (WeakMap) pamti vrednost u trenutku kad je ceo tekst označen; ako posle
-   brisanja ostane samo početak te vrednosti, polje se isprazni — kako je korisnik i hteo. Isto kao preimenovanje u prevodiocu v91. */
+/* ---------- Polja: označen tekst, Backspace i Gboard (Android Chrome) ----------
+   v46, po uzoru na Stanje guma (Zoranova odluka 14.10.), ALI bez blokade iz v44:
+   - dodir na polje označi ceo tekst; kucanje ga zamenjuje;
+   - Backspace dok je CEO tekst označen ne briše, nego skače na prethodno polje (tekst ostaje);
+   - Backspace u praznom polju skače na prethodno polje;
+   - drugi dodir postavi kursor → od tada se briše normalno, slovo po slovo (v44 je ovde i dalje blokirao — to je bila greška).
+   Odluka se uvek donosi po STVARNOM označavanju u polju (selectionStart/End), ne po zapamćenom stanju.
+   Gboard: na „obriši“ ponekad ne pošalje beforeinput koji može da se zaustavi, pa skine samo kraj označenog teksta →
+   fieldOriginal (WeakMap) pamti vrednost dok je ceo tekst bio označen; tada se vrednost vrati i skoči na prethodno polje. */
 const fieldOriginal = new WeakMap();
-function fieldFullySelected(el){ return el.value !== '' && el.selectionStart === 0 && el.selectionEnd === el.value.length; }
-function wireBackspace(el, onFix){
-  if(!el) return;
+function fieldFullySelected(el){
+  try{ return el.value !== '' && el.selectionStart === 0 && el.selectionEnd === el.value.length; }catch(e){ return false; }
+}
+function wireBackspace(el, prev){
+  if(!el || el._bsWired) return;
+  el._bsWired = true;
   let armed = false;
-  const arm = ()=>{ if(fieldFullySelected(el)){ fieldOriginal.set(el, el.value); armed = true; } else armed = false; };
+  const arm = ()=>{ armed = fieldFullySelected(el); if(armed) fieldOriginal.set(el, el.value); };
+  const goPrev = ()=>{ if(prev) prev.focus(); };
+  const blocks = ()=> el.value === '' || fieldFullySelected(el);
+  el.addEventListener('focus', ()=>{ try{ el.select(); }catch(e){} arm(); });
   el.addEventListener('select', arm);
   el.addEventListener('click', ()=> setTimeout(arm, 0));
-  el.addEventListener('beforeinput', arm);
+  el.addEventListener('keydown', (ev)=>{
+    if(ev.key !== 'Backspace') return;
+    if(blocks()){ ev.preventDefault(); goPrev(); }
+  });
+  el.addEventListener('beforeinput', (ev)=>{
+    if(ev.inputType !== 'deleteContentBackward'){ arm(); return; }
+    if(blocks()){ ev.preventDefault(); goPrev(); return; }
+    arm();
+  });
   el.addEventListener('input', (ev)=>{
     if(!armed) return;
     armed = false;
     if(!ev.inputType || ev.inputType.indexOf('delete') !== 0) return;
     const original = fieldOriginal.get(el);
-    if(typeof original === 'string' && el.value !== '' && el.value.length < original.length && original.indexOf(el.value) === 0){
-      el.value = '';
-      if(onFix) onFix();
+    if(typeof original === 'string' && original !== '' && el.value !== original){
+      el.value = original;
+      el.dispatchEvent(new Event('input', { bubbles:true }));   // obrasci (oninput) dobiju vraćenu vrednost
+      goPrev();
     }
   });
 }
 function wireFormFields(){
-  const n = document.getElementById('fNaziv'), t = document.getElementById('fTip'), k = document.getElementById('fKategorija');
-  wireBackspace(n, ()=>updateDraft('naziv', n.value));
-  wireBackspace(t, ()=>updateDraft('tip', t.value));
-  wireBackspace(k, ()=>updateDraft('kategorija', k.value));
+  const ids = ['fNaziv','fTip','fKategorija','fDoziranje','fNapomena'];
+  const els = ids.map(id=>document.getElementById(id));
+  els.forEach((el,i)=> wireBackspace(el, i>0 ? els[i-1] : null));
 }
 function renderItemForm(){
   const cats = knownCategories();
@@ -2303,6 +2320,7 @@ function setSettingsView(title, bodyHtml){
   const t=document.getElementById('setTitle'), bd=document.getElementById('setBody'), sc=document.getElementById('settingsScreen');
   if(!t || !bd) return;
   t.textContent = title; bd.innerHTML = bodyHtml; if(sc) sc.scrollTop = 0;
+  ['sThreshold','backupIntervalInput','sApiKey'].forEach(id=> wireBackspace(document.getElementById(id), null));
 }
 function renderSettingsTiles(){
   const n = settings.expiryThresholdDays;
@@ -2321,7 +2339,7 @@ function openSettingsSub(key){
   if(key==='expiry'){
     title='Upozorenje o isteku';
     body='<div class="field"><label>Upozori me koliko dana pre isteka roka</label>'+
-      '<input id="sThreshold" type="number" min="1" max="365" '+NUM+' value="'+settings.expiryThresholdDays+'"></div>'+
+      '<input id="sThreshold" type="text" '+NUM+' value="'+settings.expiryThresholdDays+'"></div>'+
       '<div class="field-hint" style="margin-bottom:18px;">Lekovi i suplementi čiji rok ističe unutar ovog broja dana pojaviće se u traci "Ističe uskoro" na početnom ekranu.</div>'+
       '<div class="modal-actions"><button class="save-btn" onclick="saveExpirySetting()">Sačuvaj</button></div>';
   } else if(key==='theme'){
@@ -2336,7 +2354,7 @@ function openSettingsSub(key){
       '<input type="file" id="backupFileInput" accept=".json" style="display:none" onchange="handleImportFile(this)">'+
       '<div class="field-hint" id="lastBackupHint">Poslednji bekap: '+lastBackupDisplay()+'</div>'+
       '<div class="field" style="margin-top:14px;"><label>Podseti me na svakih (dana) bez bekapa</label>'+
-      '<input type="number" min="1" id="backupIntervalInput" '+NUM+' value="'+getBackupIntervalDays()+'" oninput="saveBackupInterval(this.value)"></div>'+
+      '<input type="text" id="backupIntervalInput" '+NUM+' value="'+getBackupIntervalDays()+'" oninput="saveBackupInterval(this.value)"></div>'+
       '<div class="field-hint">Kad prođe ovoliko dana od poslednjeg bekapa, gore na vrhu će se pojaviti podsetnik.</div>';
   } else if(key==='apikey'){
     title='Gemini API ključ';
@@ -2384,7 +2402,7 @@ function openHelpScreen(){
     { t:'Pretraga i sortiranje', c:'"Pretraži" pretražuje naziv, tip, kategoriju i napomenu — ignoriše veliko/malo slovo i kvačice. "Sortiraj" nudi Naziv / Kategorija / Tip / Datum isteka; kod Kategorije i Tipa se pojave i grupni naslovi.' },
     { t:'Prikaz liste', c:'Ikonica ▦/☰ menja prikaz između liste (detaljnije) i mreže (kompaktnije, dve kolone). Klik na sliku leka otvara je preko celog ekrana; klik na ostatak kartice otvara detalje.' },
     { t:'AI ćaskanje', c:'Dugme "AI" gore — postavi pitanje o svojoj apoteci ("Šta imam za glavobolju?", "Šta mi ističe?"). AI može i da predloži izmenu ili brisanje, ali ništa se ne menja dok sam ne potvrdiš. Kad je Google AI preopterećen, aplikacija sama ponovi zahtev i proba rezervni model; ako ni to ne uspe, kaže ti da probaš za par minuta.' },
-    { t:'Izmena podataka leka', c:'Polja se menjaju kao svuda na telefonu: dodirni tamo gde želiš da kucaš ili brišeš. Da zameniš ceo tekst, drži prst na polju i izaberi "Izaberi sve", pa kucaj ili obriši.' },
+    { t:'Izmena podataka', c:'Dodir na polje označi ceo tekst: kucanjem ga zameniš. Za izmenu dela teksta dodirni još jednom tamo gde želiš kursor, pa briši ili kucaj normalno. Taster za brisanje na označenom ili praznom polju ne briše, nego te vrati na prethodno polje.' },
     { t:'Spisak za kupovinu', c:'Dugme "Kupovina" otvara spisak (tačka na njemu znači da nešto treba kupiti) — može da se doda bilo šta, čak i ono čega još nema u apoteci. Kvačica označava kupljeno, "🧹 Očisti kupljeno" briše sve kupljeno odjednom.' },
     { t:'Brzi meni', c:'Dug pritisak (drži prst) na kartici leka otvara brzi meni — dodaj na spisak za kupovinu ili obriši, bez da prvo ulaziš u detalje.' },
     { t:'Ako pogrešiš', c:'Brisanje stavke uvek nudi "Poništi" na par sekundi posle brisanja — ako pogrešiš, odmah se vraća.' }
