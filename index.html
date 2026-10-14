@@ -1244,7 +1244,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 46; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 47; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -1720,47 +1720,46 @@ function setRokPart(){
   formDraft.rok = (rokPartM && rokPartY) ? rokPartY+'-'+rokPartM : '';
 }
 /* ---------- Polja: označen tekst, Backspace i Gboard (Android Chrome) ----------
-   v46, po uzoru na Stanje guma (Zoranova odluka 14.10.), ALI bez blokade iz v44:
-   - dodir na polje označi ceo tekst; kucanje ga zamenjuje;
-   - Backspace dok je CEO tekst označen ne briše, nego skače na prethodno polje (tekst ostaje);
-   - Backspace u praznom polju skače na prethodno polje;
-   - drugi dodir postavi kursor → od tada se briše normalno, slovo po slovo (v44 je ovde i dalje blokirao — to je bila greška).
-   Odluka se uvek donosi po STVARNOM označavanju u polju (selectionStart/End), ne po zapamćenom stanju.
-   Gboard: na „obriši“ ponekad ne pošalje beforeinput koji može da se zaustavi, pa skine samo kraj označenog teksta →
-   fieldOriginal (WeakMap) pamti vrednost dok je ceo tekst bio označen; tada se vrednost vrati i skoči na prethodno polje. */
+   v47 — način iz Stanja guma (oznaka „netaknuto“ od dodira), koji na Zoranovom telefonu dokazano blokira brisanje.
+   v46 je odluku donosio po označavanju u trenutku pritiska (selectionStart/End) i na telefonu NIJE radio: Gboard očigledno
+   pomeri označavanje pre brisanja, pa je kod pustio brisanje (Zoran 14.10.). Zato se ne sme oslanjati na trenutno označavanje.
+   - dodir/fokus: ceo tekst označen, polje „netaknuto“, pamti se vrednost (fieldOriginal, WeakMap);
+   - dok je netaknuto, ili kad je prazno: Backspace ne briše nego skače na prethodno polje; ako Gboard ipak obriše
+     (beforeinput koji se ne može zaustaviti), vrednost se vrati cela i skoči nazad;
+   - kucanje zamenjuje tekst i skida oznaku;
+   - DRUGI dodir na polje koje je već aktivno skida oznaku → normalno brisanje slovo po slovo (v44/gume: oznaka je ostajala
+     dok se ne ukuca slovo — to je bila greška). */
 const fieldOriginal = new WeakMap();
-function fieldFullySelected(el){
-  try{ return el.value !== '' && el.selectionStart === 0 && el.selectionEnd === el.value.length; }catch(e){ return false; }
-}
 function wireBackspace(el, prev){
   if(!el || el._bsWired) return;
   el._bsWired = true;
-  let armed = false;
-  const arm = ()=>{ armed = fieldFullySelected(el); if(armed) fieldOriginal.set(el, el.value); };
-  const goPrev = ()=>{ if(prev) prev.focus(); };
-  const blocks = ()=> el.value === '' || fieldFullySelected(el);
-  el.addEventListener('focus', ()=>{ try{ el.select(); }catch(e){} arm(); });
-  el.addEventListener('select', arm);
-  el.addEventListener('click', ()=> setTimeout(arm, 0));
+  let pristine = false, wasFocused = false, restoring = false;
+  const goPrev = ()=>{ if(prev && document.activeElement !== prev) prev.focus(); };
+  const isDelete = (t)=> typeof t === 'string' && t.indexOf('delete') === 0;
+  el.addEventListener('pointerdown', ()=>{ wasFocused = (document.activeElement === el); });
+  el.addEventListener('focus', ()=>{ fieldOriginal.set(el, el.value); try{ el.select(); }catch(e){} pristine = true; });
+  /* namerno bez 'blur': skok nazad skida fokus PRE Gboard-ovog brisanja, a vraćanje teksta tada mora i dalje da radi */
+  el.addEventListener('click', ()=>{ if(wasFocused) pristine = false; wasFocused = false; });
   el.addEventListener('keydown', (ev)=>{
     if(ev.key !== 'Backspace') return;
-    if(blocks()){ ev.preventDefault(); goPrev(); }
+    if(pristine || el.value === ''){ ev.preventDefault(); goPrev(); }
   });
   el.addEventListener('beforeinput', (ev)=>{
-    if(ev.inputType !== 'deleteContentBackward'){ arm(); return; }
-    if(blocks()){ ev.preventDefault(); goPrev(); return; }
-    arm();
+    if(!isDelete(ev.inputType)) return;
+    if(pristine || el.value === ''){ ev.preventDefault(); goPrev(); }
   });
   el.addEventListener('input', (ev)=>{
-    if(!armed) return;
-    armed = false;
-    if(!ev.inputType || ev.inputType.indexOf('delete') !== 0) return;
-    const original = fieldOriginal.get(el);
-    if(typeof original === 'string' && original !== '' && el.value !== original){
-      el.value = original;
-      el.dispatchEvent(new Event('input', { bubbles:true }));   // obrasci (oninput) dobiju vraćenu vrednost
+    if(restoring || !pristine) return;
+    if(isDelete(ev.inputType)){
+      const original = fieldOriginal.get(el);
+      if(typeof original === 'string' && el.value !== original){
+        el.value = original;
+        restoring = true; el.dispatchEvent(new Event('input', { bubbles:true })); restoring = false;   // obrazac dobije vraćenu vrednost
+      }
       goPrev();
+      return;
     }
+    pristine = false;
   });
 }
 function wireFormFields(){
