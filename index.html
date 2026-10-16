@@ -668,6 +668,7 @@ const HOME_IC = {
 };
 function lekRec(n){ const d=n%10, s=n%100; if(d===1 && s!==11) return 'lek'; if(d>=2 && d<=4 && (s<12 || s>14)) return 'leka'; return 'lekova'; }
 function lsGet(key){ try{ const v=localStorage.getItem(key); return v===null?null:{value:v}; }catch(e){ return null; } }
+/* MODUL bekap-bezbednost v1 */
 function lsSet(key,val){ try{ localStorage.setItem(key,val); return true; }catch(e){ return false; } }
 /* v54 (uzor Troškovi v34): neuspeo upis (pun prostor — slike lekova zauzimaju dosta — ili zabrana) se više ne guta tiho:
    crveno „NIJE SAČUVANO!“ gore, najviše jednom u 4 s. Dok ono stoji, zelene potvrde („sačuvan“, „Sačuvano: …“) se ne
@@ -834,6 +835,7 @@ function setApiKey(v){ return persistChecked('apoteka:apiKey', v); }
    Uvek gore; ekran i otvoreni prozori se spuste ispod (body.noting, --note-h), ništa nije prekriveno.
    Bez ✕: dodir ne zatvara, stoji 4 s (greška 6 s) i nestane sam; dok je prst na ekranu, sačeka da se podigne
    (najviše još 4 s), da se ekran ne pomeri pod prstom. showBanner i showQuickToast idu ovde. */
+/* MODUL obavestenja v1 */
 let _note = null, _noteTimer = null, _noteWait = false, _ptrDown = 0;
 document.addEventListener('pointerdown', ()=>{ _ptrDown++; }, true);
 const _notePtrUp = ()=>{ _ptrDown = Math.max(0, _ptrDown-1); if(_ptrDown===0 && _noteWait){ _noteWait = false; hideNote(); } };
@@ -1737,6 +1739,7 @@ function aiFormatStatusHtml(){
    Redosled: glavni model → posle ~1 s opet glavni → posle ~2 s rezervni → posle ~4 s opet rezervni.
    Vraća odgovor (resp) čim stigne nešto što nije privremena greška; inače jasna poruka na srpskom. */
 const GEMINI_RETRY_STATUS = [408,429,500,502,503,504];
+/* MODUL gemini v1 */
 function geminiPause(ms){ return new Promise(r=>setTimeout(r, ms + Math.floor(Math.random()*400))); }
 function geminiErrorText(body){
   try{ const j = JSON.parse(body); if(j && j.error && j.error.message) return String(j.error.message); }catch(e){}
@@ -1878,6 +1881,7 @@ function setRokPart(){
   rokPartY = document.getElementById('fRokY').value;
   formDraft.rok = (rokPartM && rokPartY) ? rokPartY+'-'+rokPartM : '';
 }
+/* MODUL gboard-backspace v1 */
 /* ---------- Polja: označen tekst, Backspace i Gboard (Android Chrome) ----------
    v47 — način iz Stanja guma (oznaka „netaknuto“ od dodira), koji na Zoranovom telefonu dokazano blokira brisanje.
    v46 je odluku donosio po označavanju u trenutku pritiska (selectionStart/End) i na telefonu NIJE radio: Gboard očigledno
