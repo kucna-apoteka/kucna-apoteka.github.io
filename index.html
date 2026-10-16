@@ -668,11 +668,65 @@ const HOME_IC = {
 };
 function lekRec(n){ const d=n%10, s=n%100; if(d===1 && s!==11) return 'lek'; if(d>=2 && d<=4 && (s<12 || s>14)) return 'leka'; return 'lekova'; }
 function lsGet(key){ try{ const v=localStorage.getItem(key); return v===null?null:{value:v}; }catch(e){ return null; } }
-function lsSet(key,val){ try{ localStorage.setItem(key,val); }catch(e){} }
+function lsSet(key,val){ try{ localStorage.setItem(key,val); return true; }catch(e){ return false; } }
+/* v54 (uzor Troškovi v34): neuspeo upis (pun prostor — slike lekova zauzimaju dosta — ili zabrana) se više ne guta tiho:
+   crveno „NIJE SAČUVANO!“ gore, najviše jednom u 4 s. Dok ono stoji, zelene potvrde („sačuvan“, „Sačuvano: …“) se ne
+   prikazuju, da ne prekriju upozorenje i ne tvrde nešto što nije tačno. */
+let _saveFailAt = 0;
+function warnSaveFailed(){
+  const n = Date.now(); if(n - _saveFailAt < 4000) return; _saveFailAt = n;
+  showNote('NIJE SAČUVANO! Memorija je puna ili nedostupna — odmah podeli kopiju.', {warn:true});
+}
+function saveFailActive(){ return Date.now() - _saveFailAt < 6000; }
+function persistChecked(key, val){ if(!lsSet(key, val)){ warnSaveFailed(); return false; } return true; }
 
 /* ---------- BACKUP: export / import / reminder ---------- */
+function buildBackup(){
+  return { version:1, exportedAt: new Date().toISOString(), items: items, settings: settings, shopping: shoppingList, backupIntervalDays: getBackupIntervalDays() };
+}
+/* v54 (uzor Troškovi v34/v37): „Podeli kopiju“ — Androidov meni za deljenje (Google Drive, mejl…). Chrome ne deli .json
+   (izvorni kod Chromium-a, chrome/browser/webshare/share_service_impl.cc), .txt/text/plain da → isti JSON u fajlu .txt.
+   navigator.share se zove odmah u dodiru (bez ičeg asinhronog pre). Drive za ime fajla uzima NASLOV deljenja → title = ime
+   fajla sa datumom i vremenom. Bekap se beleži tek kad deljenje uspe; zatvoren meni (AbortError) nije greška. */
+function backupShareName(){
+  const d = new Date(), p = n=>String(n).padStart(2,'0');
+  return 'apoteka-kopija-'+todayISO()+'-'+p(d.getHours())+'.'+p(d.getMinutes())+'.txt';
+}
+function canShareBackup(){
+  try{ return !!(navigator.canShare && navigator.share && navigator.canShare({ files:[ new File(['{}'], 'proba.txt', {type:'text/plain'}) ] })); }
+  catch(e){ return false; }
+}
+function shareBackup(){
+  let file; const name = backupShareName();
+  try{ file = new File([JSON.stringify(buildBackup(), null, 2)], name, {type:'text/plain'}); }
+  catch(e){ showBanner('Deljenje nije uspelo: '+(e && e.message ? e.message : e)); return; }
+  navigator.share({ files:[file], title: name }).then(()=>{
+    markBackupDone(); render();
+    const hintEl = document.getElementById('lastBackupHint');
+    if(hintEl) hintEl.textContent = 'Poslednji bekap: '+lastBackupDisplay();
+    showBanner('Kopija je podeljena.', 'info');
+  }).catch(err=>{
+    if(err && err.name==='AbortError') return;
+    showBanner('Deljenje nije uspelo: '+(err && err.message ? err.message : err));
+  });
+}
+/* v54: trajno čuvanje — Chrome sam odlučuje, bez prozora (web.dev/articles/persistent-storage). */
+let storagePersisted = null;
+function requestPersistentStorage(){
+  if(!(navigator.storage && navigator.storage.persist)) return;
+  navigator.storage.persisted().then(p=> p ? true : navigator.storage.persist()).then(p=>{
+    storagePersisted = !!p;
+    const el = document.getElementById('persistHint'); if(el) el.textContent = persistHintText();
+  }).catch(()=>{});
+}
+function persistHintText(){
+  if(storagePersisted===null) return '';
+  return storagePersisted ? '✓ Chrome čuva podatke ove aplikacije trajno (ne briše ih sam kad ponestane mesta).'
+                          : 'Chrome nije odobrio trajno čuvanje — redovno pravi rezervnu kopiju.';
+}
+requestPersistentStorage();
 function exportBackup(){
-  const backup = { version:1, exportedAt: new Date().toISOString(), items: items, settings: settings, shopping: shoppingList, backupIntervalDays: getBackupIntervalDays() };
+  const backup = buildBackup();
   const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -733,12 +787,12 @@ function getBackupIntervalDays(){
   const n = v ? parseInt(v.value) : NaN;
   return (n && n > 0) ? n : 7;
 }
-function setBackupIntervalDays(days){ lsSet('apoteka:backupIntervalDays', String(days)); }
+function setBackupIntervalDays(days){ return persistChecked('apoteka:backupIntervalDays', String(days)); }
 function getLastBackupDate(){
   const v = lsGet('apoteka:lastBackup');
   return v ? new Date(v.value) : null;
 }
-function markBackupDone(){ lsSet('apoteka:lastBackup', new Date().toISOString()); }
+function markBackupDone(){ return persistChecked('apoteka:lastBackup', new Date().toISOString()); }
 function daysSinceBackup(date){ return Math.floor((Date.now() - date.getTime()) / 86400000); }
 function lastBackupDisplay(){
   const last = getLastBackupDate();
@@ -758,23 +812,23 @@ function backupReminderHtml(){
   if(!msg) return '';
   return '<div class="backup-reminder-row">'+
     '<span>'+escapeHtml(msg)+'</span>'+
-    '<button onclick="exportBackup()">izvezi bekap</button>'+
+    (canShareBackup() ? '<button onclick="shareBackup()">podeli kopiju</button>' : '<button onclick="exportBackup()">izvezi bekap</button>')+
     '</div>';
 }
-function persistItems(){ lsSet('apoteka:items', JSON.stringify(items)); }
+function persistItems(){ return persistChecked('apoteka:items', JSON.stringify(items)); }
 function loadItems(){
   const saved = lsGet('apoteka:items');
   if(saved && saved.value){ try{ items = JSON.parse(saved.value); }catch(e){} }
   else { persistItems(); }
 }
-function persistSettings(){ lsSet('apoteka:settings', JSON.stringify(settings)); }
+function persistSettings(){ return persistChecked('apoteka:settings', JSON.stringify(settings)); }
 function loadSettings(){
   const saved = lsGet('apoteka:settings');
   if(saved && saved.value){ try{ settings = Object.assign(settings, JSON.parse(saved.value)); }catch(e){} }
   if(!validTheme(settings.theme)) settings.theme = 'klasicna';
 }
 function getApiKey(){ const k=lsGet('apoteka:apiKey'); return (k && k.value) ? k.value : ''; }
-function setApiKey(v){ lsSet('apoteka:apiKey', v); }
+function setApiKey(v){ return persistChecked('apoteka:apiKey', v); }
 
 /* ---------- OBAVEŠTENJA (v49, kao Troškovi; Zoran 14.10.: pravougaoni prozor sa velikim tekstom) ----------
    Uvek gore; ekran i otvoreni prozori se spuste ispod (body.noting, --note-h), ništa nije prekriveno.
@@ -787,6 +841,7 @@ document.addEventListener('pointerup', _notePtrUp, true);
 document.addEventListener('pointercancel', _notePtrUp, true);
 function showNote(msg, opt){
   opt = opt || {};
+  if(!opt.warn && typeof saveFailActive==='function' && saveFailActive()) return;   /* v54: ne prekrivati „NIJE SAČUVANO!“ */
   _note = { text: String(msg), warn: !!opt.warn };
   clearTimeout(_noteTimer); _noteWait = false;
   _noteTimer = setTimeout(noteTimeUp, opt.ms || (opt.warn ? 6000 : 4000));
@@ -999,7 +1054,7 @@ function quickDeleteFromMenu(id){
 
 /* ---------- SPISAK ZA KUPOVINU ---------- */
 let shoppingList = [];
-function persistShoppingList(){ lsSet('apoteka:shopping', JSON.stringify(shoppingList)); }
+function persistShoppingList(){ return persistChecked('apoteka:shopping', JSON.stringify(shoppingList)); }
 function loadShoppingList(){
   const saved = lsGet('apoteka:shopping');
   if(saved && saved.value){ try{ shoppingList = JSON.parse(saved.value); }catch(e){} }
@@ -1348,7 +1403,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 53; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 54; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -2483,15 +2538,17 @@ function openSettingsSub(key){
     body='<div id="themeOptList">'+themeOptionsHtml()+'</div>';
   } else if(key==='backup'){
     title='Rezervna kopija';
-    body='<div class="modal-actions" style="margin-bottom:10px;">'+
+    body=(canShareBackup() ? '<div class="modal-actions" style="margin-bottom:10px;"><button class="save-btn" id="shareBackupBtn" onclick="shareBackup()">Podeli kopiju (Google Drive, mejl…)</button></div>' : '')+
+      '<div class="modal-actions" style="margin-bottom:10px;">'+
       '<button class="cancel-btn" style="flex:1;" onclick="exportBackup()">Izvezi bekap</button>'+
       '<button class="cancel-btn" style="flex:1;" onclick="triggerImportBackup()">Uvezi bekap</button>'+
       '</div>'+
-      '<input type="file" id="backupFileInput" accept=".json" style="display:none" onchange="handleImportFile(this)">'+
+      '<input type="file" id="backupFileInput" accept=".json,.txt,application/json,text/plain" style="display:none" onchange="handleImportFile(this)">'+
       '<div class="field-hint" id="lastBackupHint">Poslednji bekap: '+lastBackupDisplay()+'</div>'+
       '<div class="field" style="margin-top:14px;"><label>Podseti me na svakih (dana) bez bekapa</label>'+
       daysFieldHtml('backupIntervalInput', getBackupIntervalDays())+'</div>'+
-      '<div class="field-hint">Kad prođe ovoliko dana od poslednjeg bekapa, gore na vrhu će se pojaviti podsetnik.</div>';
+      '<div class="field-hint">Kad prođe ovoliko dana od poslednjeg bekapa, gore na vrhu će se pojaviti podsetnik.</div>'+
+      '<div class="field-hint" id="persistHint" style="margin-top:18px;">'+persistHintText()+'</div>';
   } else if(key==='apikey'){
     title='Gemini API ključ';
     body='<div class="field"><label>Google Gemini API ključ</label>'+
@@ -2541,7 +2598,7 @@ function openTrashScreen(){
     '<div id="trashList"></div>');
   wireBackspace(document.getElementById('trashDaysInput'), null);
   wireDaysField('trashDaysInput', getTrashDays,
-    (n)=>{ lsSet(TRASH_DAYS_KEY, String(n)); renderTrashList(); },
+    (n)=>{ persistChecked(TRASH_DAYS_KEY, String(n)); renderTrashList(); },
     (n)=>'Sačuvano: korpa čuva '+n+' '+daniRec(n));
   const sc = document.getElementById('settingsScreen');
   const bar = document.createElement('div'); bar.className = 'trash-bar'; bar.id = 'trashBar';
@@ -2588,7 +2645,7 @@ function trashRestoreSelected(){
     if(items.some(i=>i.id===it.id)) it.id = 'm'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
     items.push(it);
   });
-  persistItems();
+  if(!persistItems()){ items = items.slice(0, items.length - chosen.length); render(); return; }   /* v54: ostaje u korpi */
   setTrash(all.filter(x=>!trashSel.has(x.id)));
   trashSel = new Set();
   render(); renderTrashList();
@@ -2642,6 +2699,7 @@ function openHelpScreen(){
     { t:'Obaveštenja', c:'Sve poruke aplikacije pojavljuju se gore, u okviru sa velikim slovima: zeleno kad je nešto urađeno, crveno kad nešto nije uspelo. Ekran se spusti ispod okvira, pa ništa nije prekriveno. Okvir nestane sam (posle 4 sekunde, greška posle 6).' },
     { t:'Brisanje prevlačenjem', c:'U prikazu spiska povuci karticu leka prstom ulevo: ispod nje se pojavi crveno dugme "Izbriši". Dodir na njega traži potvrdu, pa lek ide u korpu. Dodir bilo gde drugde vraća karticu na mesto.' },
     { t:'Korpa', c:'Obrisan lek ide u korpu (Podešavanja → Korpa) i tamo čeka zadati broj dana (podrazumevano 30), pa se sam trajno briše. U korpi dodirom izabereš lekove, pa "Vrati" (vraća ih u apoteku sa svim podacima i slikom) ili "Obriši trajno". Korpa ne ulazi u rezervnu kopiju.' },
+    { t:'Rezervna kopija', c:'Podaci se čuvaju samo u Chrome-u na ovom telefonu: kad se obrišu podaci sajta, nestaju. Podešavanja → Rezervna kopija: "Podeli kopiju" otvara meni za deljenje, pa kopiju jednim dodirom pošalješ na Google Drive ili mejlom; ime kopije ima datum i vreme (npr. apoteka-kopija-2026-10-16-14.30.txt). "Izvezi bekap" preuzima fajl na telefon, a "Uvezi bekap" vraća podatke iz kopije (.txt ili stari .json). Korpa i Gemini ključ ne ulaze u kopiju. Na dnu ekrana piše da li je Chrome odobrio trajno čuvanje. Ako upis u memoriju telefona ikad ne uspe (npr. pun prostor), gore odmah piše crveno "NIJE SAČUVANO!".' },
     { t:'Brojevi u podešavanjima', c:'Broj dana (upozorenje o isteku, podsetnik za bekap, korpa) menjaš u polju, pa dodirneš "Sačuvaj" pored njega ili Enter na tastaturi. Gore se pojavi potvrda. Dok broj nije promenjen, "Sačuvaj" je bled. Ako izađeš bez čuvanja, ostaje stari broj. Dozvoljen je broj od 1 do 365. Isto važi za Gemini ključ: čuva se tek dugmetom "Sačuvaj".' }
   ];
   b.innerHTML = '<div class="modal full">'+
