@@ -66,7 +66,11 @@
   .set-header{ position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:4px; padding:calc(10px + env(safe-area-inset-top)) 12px 10px 6px; background:var(--bg); border-bottom:1px solid var(--line); }
   .set-back{ width:44px; height:44px; border:none; background:none; color:var(--text-dim); cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; flex:none; border-radius:12px; }
   .set-back:active{ background:var(--bg-card); }
-  .set-ver{ flex:none; font-size:14px; font-weight:600; color:var(--text-dim); padding-right:6px; }
+  .set-ver{ flex:none; font-size:14px; font-weight:600; color:var(--text-dim); padding-right:6px; text-align:right; }
+  .set-ver .err-count{ display:block; margin:2px 0 0 auto; padding:2px 0; border:none; background:none; font:inherit; font-size:11.5px; color:var(--coral); cursor:pointer; }
+  .err-row{ padding:12px 0; border-bottom:1px solid color-mix(in srgb, var(--text) 14%, transparent); }
+  .err-row .err-meta{ font-size:12.5px; font-weight:600; color:var(--text-dim); }
+  .err-row .err-msg{ font-size:15px; color:var(--text); margin-top:3px; line-height:1.35; overflow-wrap:anywhere; }
   .set-title{ margin:0; padding:0; flex:1; min-width:0; font-size:20px; font-weight:600; color:var(--green-deep); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .set-body{ padding:16px 14px; max-width:560px; margin:0 auto; box-sizing:border-box; }
   .set-tile{ display:flex; align-items:center; gap:14px; width:100%; padding:18px 16px; margin:0 0 12px; background:var(--bg-card); border:1px solid var(--line); border-radius:16px; cursor:pointer; text-align:left; font-family:inherit; color:var(--text); box-sizing:border-box; }
@@ -668,6 +672,58 @@ const HOME_IC = {
 };
 function lekRec(n){ const d=n%10, s=n%100; if(d===1 && s!==11) return 'lek'; if(d>=2 && d<=4 && (s<12 || s>14)) return 'leka'; return 'lekova'; }
 function lsGet(key){ try{ const v=localStorage.getItem(key); return v===null?null:{value:v}; }catch(e){ return null; } }
+/* MODUL dnevnik-gresaka v1 */
+/* v55 (Zoran 16.10.: „to je to“): dnevnik grešaka — poslednjih 20 grešaka sa ovog telefona (JS greške, neuspeli Gemini
+   pozivi, neuspeo upis), sa vremenom, verzijom i mestom. Vidi se tek kad ih ima: „N greške“ ispod broja verzije u
+   Podešavanjima → ekran „Dnevnik grešaka“ (Kopiraj / Obriši dnevnik). Ne ide u rezervnu kopiju. Upis tih (bez upozorenja),
+   da dnevnik ne pravi nove greške. Cilj: tačan uzrok iz pravog Chrome-a umesto nagađanja. */
+const ERRLOG_KEY = 'apoteka:errlog', ERRLOG_MAX = 20;
+function getErrLog(){ try{ const v = localStorage.getItem(ERRLOG_KEY); const a = v ? JSON.parse(v) : []; return Array.isArray(a) ? a : []; }catch(e){ return []; } }
+function logError(where, msg){
+  try{
+    const list = getErrLog();
+    list.unshift({ at: new Date().toISOString(), v: (typeof APP_VERSION!=='undefined' ? APP_VERSION : 0), where: String(where||''), msg: String(msg||'').slice(0,400) });
+    localStorage.setItem(ERRLOG_KEY, JSON.stringify(list.slice(0, ERRLOG_MAX)));
+  }catch(e){}
+  try{ updateErrBadge(); }catch(e){}
+}
+window.addEventListener('error', (e)=>{
+  if(!e || !e.message) return;
+  const f = e.filename ? ' — '+String(e.filename).split('/').pop().split('?')[0]+':'+e.lineno : '';
+  logError('aplikacija', e.message + f);
+});
+window.addEventListener('unhandledrejection', (e)=>{
+  const r = e && e.reason; logError('aplikacija', (r && r.message) ? r.message : String(r));
+});
+function greskeRec(n){ const d=n%10, s=n%100; if(d===1 && s!==11) return 'greška'; if(d>=2 && d<=4 && (s<12 || s>14)) return 'greške'; return 'grešaka'; }
+function errBadgeHtml(){ const n = getErrLog().length; return n ? '<button class="err-count" id="errCount" onclick="openSettingsSub(\'errlog\')">'+n+' '+greskeRec(n)+'</button>' : ''; }
+function updateErrBadge(){ const v = document.querySelector('#settingsScreen .set-ver'); if(v) v.innerHTML = 'verzija '+APP_VERSION+errBadgeHtml(); }
+function errTimeText(iso){ const d = new Date(iso), p = n=>String(n).padStart(2,'0'); return p(d.getDate())+'.'+p(d.getMonth()+1)+'. '+p(d.getHours())+':'+p(d.getMinutes()); }
+function errLogText(){ return getErrLog().map(x=> errTimeText(x.at)+' · v'+x.v+' · '+x.where+'\n'+x.msg).join('\n\n'); }
+function errLogBodyHtml(){
+  const list = getErrLog();
+  if(!list.length) return '<div class="field-hint">Nema zabeleženih grešaka.</div>';
+  return '<div class="field-hint" style="margin-bottom:10px;">Greške koje se dese na ovom telefonu. Kad nešto ne radi kako treba, dodirni „Kopiraj“ i nalepi tekst u čet sa Claude-om.</div>'+
+    '<div class="modal-actions" style="margin-bottom:6px;"><button class="save-btn" id="errCopyBtn" onclick="copyErrLog()">Kopiraj</button><button class="cancel-btn" id="errClearBtn" onclick="clearErrLog()">Obriši dnevnik</button></div>'+
+    list.map(x=>'<div class="err-row"><div class="err-meta">'+escapeHtml(errTimeText(x.at)+' · v'+x.v+' · '+x.where)+'</div><div class="err-msg">'+escapeHtml(x.msg)+'</div></div>').join('');
+}
+function copyErrLog(){
+  const txt = 'Kućna apoteka — dnevnik grešaka\n\n'+errLogText();
+  const ok = ()=> showBanner('Dnevnik je kopiran — nalepi ga u čet.', 'info');
+  const fallback = ()=>{
+    const ta = document.createElement('textarea'); ta.value = txt; ta.setAttribute('readonly',''); ta.style.cssText='position:fixed;top:-1000px;opacity:0;';
+    document.body.appendChild(ta); ta.select(); let done = false; try{ done = document.execCommand('copy'); }catch(e){}
+    ta.remove(); if(done) ok(); else showBanner('Kopiranje nije uspelo.');
+  };
+  if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(ok, fallback); else fallback();
+}
+function clearErrLog(){
+  showConfirm('Obrisati dnevnik grešaka?', ()=>{
+    try{ localStorage.removeItem(ERRLOG_KEY); }catch(e){}
+    updateErrBadge(); const bd = document.getElementById('setBody'); if(bd) bd.innerHTML = errLogBodyHtml();
+    showBanner('Dnevnik je obrisan.', 'info');
+  }, 'Da, obriši');
+}
 /* MODUL bekap-bezbednost v1 */
 function lsSet(key,val){ try{ localStorage.setItem(key,val); return true; }catch(e){ return false; } }
 /* v54 (uzor Troškovi v34): neuspeo upis (pun prostor — slike lekova zauzimaju dosta — ili zabrana) se više ne guta tiho:
@@ -676,6 +732,7 @@ function lsSet(key,val){ try{ localStorage.setItem(key,val); return true; }catch
 let _saveFailAt = 0;
 function warnSaveFailed(){
   const n = Date.now(); if(n - _saveFailAt < 4000) return; _saveFailAt = n;
+  logError('čuvanje', 'Upis u memoriju telefona nije uspeo (pun prostor ili zabrana).');
   showNote('NIJE SAČUVANO! Memorija je puna ili nedostupna — odmah podeli kopiju.', {warn:true});
 }
 function saveFailActive(){ return Date.now() - _saveFailAt < 6000; }
@@ -1405,7 +1462,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 54; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 55; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -1746,6 +1803,7 @@ function geminiErrorText(body){
   return String(body||'');
 }
 function geminiHttpError(status, body){
+  logError('Gemini', 'HTTP '+status+': '+geminiErrorText(body).slice(0,300));
   if(status===401) return new Error('Google nije prihvatio ključ (401 - neautorizovan). Proveri da li si ključ tačno nalepio u Podešavanjima, ili napravi nov ključ na aistudio.google.com.');
   if(status===400 && /API key/i.test(body)) return new Error('Gemini API ključ nije važeći. Proveri ga u Podešavanjima.');
   return new Error('Gemini greška ('+status+'): '+geminiErrorText(body).slice(0,200));
@@ -1769,6 +1827,7 @@ async function geminiFetch(models, body, timeoutMs){
         signal: controller.signal
       });
     } catch(fetchErr){
+      logError('Gemini', model+': '+(fetchErr.name==='AbortError' ? 'nema odgovora na vreme' : 'nema veze ('+fetchErr.message+')'));
       if(fetchErr.name==='AbortError') throw new Error('Server nije odgovorio na vreme. Proveri internet i probaj ponovo.');
       throw new Error('Ne mogu da se povežem sa AI servisom: '+fetchErr.message);
     } finally {
@@ -1778,6 +1837,7 @@ async function geminiFetch(models, body, timeoutMs){
     lastStatus = resp.status;
     await resp.text().catch(()=> '');
   }
+  logError('Gemini', 'HTTP '+lastStatus+' posle 4 pokušaja (i rezervni model)');
   if(lastStatus===429) throw new Error('Google AI je trenutno odbio zahtev zbog ograničenja broja zahteva na tvom nalogu. Sačekaj malo pa probaj ponovo.');
   throw new Error('Google AI je trenutno preopterećen. Aplikacija je pokušala 4 puta, i sa rezervnim modelom. Probaj ponovo za par minuta.');
 }
@@ -2473,7 +2533,7 @@ function openSettings(){
   if(settingsCloseFn) return;
   const el = document.createElement('div'); el.className='settings-screen'; el.id='settingsScreen';
   el.innerHTML = '<div class="set-header"><button class="set-back" onclick="settingsBack()" aria-label="Nazad">'+SETTINGS_BACK_SVG+'</button>'+
-    '<h2 class="set-title serif" id="setTitle"></h2><span class="set-ver">verzija '+APP_VERSION+'</span></div><div class="set-body" id="setBody"></div>';
+    '<h2 class="set-title serif" id="setTitle"></h2><span class="set-ver">verzija '+APP_VERSION+errBadgeHtml()+'</span></div><div class="set-body" id="setBody"></div>';
   document.body.appendChild(el);
   document.body.style.overflow='hidden';
   settingsCloseFn = ()=>{ const x=document.getElementById('settingsScreen'); if(x) x.remove(); document.body.style.overflow=''; settingsCloseFn=null; settingsSubFn=null; };
@@ -2553,6 +2613,9 @@ function openSettingsSub(key){
       daysFieldHtml('backupIntervalInput', getBackupIntervalDays())+'</div>'+
       '<div class="field-hint">Kad prođe ovoliko dana od poslednjeg bekapa, gore na vrhu će se pojaviti podsetnik.</div>'+
       '<div class="field-hint" id="persistHint" style="margin-top:18px;">'+persistHintText()+'</div>';
+  } else if(key==='errlog'){
+    title='Dnevnik grešaka';
+    body=errLogBodyHtml();
   } else if(key==='apikey'){
     title='Gemini API ključ';
     body='<div class="field"><label>Google Gemini API ključ</label>'+
@@ -2704,6 +2767,7 @@ function openHelpScreen(){
     { t:'Brisanje prevlačenjem', c:'U prikazu spiska povuci karticu leka prstom ulevo: ispod nje se pojavi crveno dugme "Izbriši". Dodir na njega traži potvrdu, pa lek ide u korpu. Dodir bilo gde drugde vraća karticu na mesto.' },
     { t:'Korpa', c:'Obrisan lek ide u korpu (Podešavanja → Korpa) i tamo čeka zadati broj dana (podrazumevano 30), pa se sam trajno briše. U korpi dodirom izabereš lekove, pa "Vrati" (vraća ih u apoteku sa svim podacima i slikom) ili "Obriši trajno". Korpa ne ulazi u rezervnu kopiju.' },
     { t:'Rezervna kopija', c:'Podaci se čuvaju samo u Chrome-u na ovom telefonu: kad se obrišu podaci sajta, nestaju. Podešavanja → Rezervna kopija: "Podeli kopiju" otvara meni za deljenje, pa kopiju jednim dodirom pošalješ na Google Drive ili mejlom; ime kopije ima datum i vreme (npr. apoteka-kopija-2026-10-16-14.30.txt). "Izvezi bekap" preuzima fajl na telefon, a "Uvezi bekap" vraća podatke iz kopije (.txt ili stari .json). Korpa i Gemini ključ ne ulaze u kopiju. Na dnu ekrana piše da li je Chrome odobrio trajno čuvanje. Ako upis u memoriju telefona ikad ne uspe (npr. pun prostor), gore odmah piše crveno "NIJE SAČUVANO!".' },
+    { t:'Dnevnik grešaka', c:'Kad se na telefonu desi greška (npr. AI ne odgovori ili nešto ne uspe), aplikacija je tiho zapiše. Tada u Podešavanjima, ispod broja verzije, sitno crveno piše koliko ih ima — dodir otvara dnevnik: vreme, verzija, mesto i tekst greške. "Kopiraj" stavi ceo dnevnik u međuspremnik, da ga nalepiš u čet; "Obriši dnevnik" ga prazni. Pamti se poslednjih 20 grešaka; dnevnik ne ide u rezervnu kopiju.' },
     { t:'Brojevi u podešavanjima', c:'Broj dana (upozorenje o isteku, podsetnik za bekap, korpa) menjaš u polju, pa dodirneš "Sačuvaj" pored njega ili Enter na tastaturi. Gore se pojavi potvrda. Dok broj nije promenjen, "Sačuvaj" je bled. Ako izađeš bez čuvanja, ostaje stari broj. Dozvoljen je broj od 1 do 365. Isto važi za Gemini ključ: čuva se tek dugmetom "Sačuvaj".' }
   ];
   b.innerHTML = '<div class="modal full">'+
