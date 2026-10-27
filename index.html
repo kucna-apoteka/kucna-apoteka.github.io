@@ -606,6 +606,8 @@ input::selection, textarea::selection{ background:color-mix(in srgb, var(--frame
 .crop-header{ padding-top:calc(16px + env(safe-area-inset-top,0px)); }
 .photo-full-close{ top:calc(18px + env(safe-area-inset-top,0px)); }
 .form-full .ff-head{ padding-top:calc(14px + env(safe-area-inset-top,0px)); }
+  input.pre-sel, textarea.pre-sel{ background:color-mix(in srgb, var(--green-deep) 14%, var(--bg-card)) !important; }
+  input.pre-sel::placeholder, textarea.pre-sel::placeholder{ color:var(--text); opacity:1; }
 </style>
 </head>
 <body>
@@ -1462,7 +1464,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 55; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 56; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* v45: modeli po zvaničnom spisku (ai.google.dev/gemini-api/docs/models i /deprecations, 13.10.2026). gemini-3.5-flash je povučen
    (Google ga sam preusmerava na gemini-3.6-flash), zato sada pišemo tačan naziv. Svaki posao ima rezervni model; oba podržavaju
    pretragu interneta (google_search). */
@@ -1941,49 +1943,75 @@ function setRokPart(){
   rokPartY = document.getElementById('fRokY').value;
   formDraft.rok = (rokPartM && rokPartY) ? rokPartY+'-'+rokPartM : '';
 }
-/* MODUL gboard-backspace v1 */
-/* ---------- Polja: označen tekst, Backspace i Gboard (Android Chrome) ----------
-   v47 — način iz Stanja guma (oznaka „netaknuto“ od dodira), koji na Zoranovom telefonu dokazano blokira brisanje.
-   v46 je odluku donosio po označavanju u trenutku pritiska (selectionStart/End) i na telefonu NIJE radio: Gboard očigledno
-   pomeri označavanje pre brisanja, pa je kod pustio brisanje (Zoran 14.10.). Zato se ne sme oslanjati na trenutno označavanje.
-   - dodir/fokus: ceo tekst označen, polje „netaknuto“, pamti se vrednost (fieldOriginal, WeakMap);
-   - dok je netaknuto, ili kad je prazno: Backspace ne briše nego skače na prethodno polje; ako Gboard ipak obriše
-     (beforeinput koji se ne može zaustaviti), vrednost se vrati cela i skoči nazad;
-   - kucanje zamenjuje tekst i skida oznaku;
-   - DRUGI dodir na polje koje je već aktivno skida oznaku → normalno brisanje slovo po slovo (v44/gume: oznaka je ostajala
-     dok se ne ukuca slovo — to je bila greška). */
+/* MODUL gboard-backspace v3 — v3 (Apoteka v56): polje za lozinku/ključ pokazuje tačkice umesto starog teksta.
+   v2 — izvor: Zakazivanje guma v13 (probano na Zoranovom telefonu 26.10.2026: mikrofon iz prvog dodira,
+   Backspace nazad bez brisanja). ZAMENJUJE v1 (Apoteka v47) — v1 ima grešku sa mikrofonom Gboard-a.
+MERENJE (dnevnik, Gboard, Android Chrome):
+ - na STVARNO označenom tekstu Backspace i mikrofon šalju ISTO (taster 229 + beforeinput deleteContentBackward preko celog
+   označenog; cancelable=true, ali se brisanje IPAK izvrši) → v1 je mikrofon tretirao kao Backspace (skok nazad). Tekst je kod
+   Backspace-a „ostajao“ samo zato što fokus odmah pređe na prethodno polje, ne zbog preventDefault;
+ - mikrofon ne menja visinu ekrana; diktat stiže tek kad se progovori (i 8 s posle dodira) → nema signala ni vremena za razliku;
+ - u PRAZNOM polju Backspace stiže kao pravi taster „Backspace/8“;
+ - promena el.value iz koda dok Gboard radi (npr. brisanje na taster 229) PREKIDA mikrofon posle 2 slova.
+PRAVILO: dok tastatura radi, kod NE menja el.value (ni formatiranje iznosa: samo kad se razlikuje i ne usred kompozicije).
+REŠENJE: pri ulasku u polje (dodir, strelica napred, Backspace nazad) polje se isprazni, stari tekst se prikaže kao osenčen
+placeholder (obrazac/podatak ga i dalje ima); Backspace u praznom → nazad; izlaz bez unosa vraća tekst; drugi dodir vraća tekst.
+Prenos: wireBackspace(polje, prethodno) za svako tekstualno polje (ne date/time/dugmad); podaci se čitaju iz obrasca/oninput,
+a NE iz el.value pri čuvanju dok je polje osenčeno (ili prvo blur). CSS (prilagoditi boje):
+  input.pre-sel, textarea.pre-sel{ background:color-mix(in srgb, var(--green-deep) 20%, var(--bg)); }
+  input.pre-sel::placeholder, textarea.pre-sel::placeholder{ color:var(--text); opacity:1; }
+Test: `testovi/zg-v13.py` (proverava i da kod ne menja tekst tokom diktata). */
+/* v13: polja izmene — po merenju na Zoranovom telefonu (v9, v11, v12 dnevnik, 26.10.):
+   - na STVARNO označenom tekstu Backspace i mikrofon Gboard-a šalju isto (brisanje koje se ne da zaustaviti);
+   - u PRAZNOM polju Backspace stiže kao taster „Backspace/8“, a mikrofon i kucanje rade bez smetnje;
+   - v12 je brisao stari tekst iz koda u trenutku dodira na mikrofon → Gboard prekine glas posle 2 slova (zato je tek drugi
+     dodir radio). Pravilo: dok tastatura radi, kod NE menja tekst u polju.
+   Zato: pri ulasku u polje (dodir, strelica, Backspace) polje je PRAZNO, a stari tekst se vidi osenčen (kao predlog u polju).
+   - Backspace → korak nazad; pri izlasku bez unosa stari tekst se vraća (obrazac ga nije ni gubio);
+   - kucanje ili diktat → upisuje se samo novo;
+   - drugi dodir → stari tekst se vrati u polje za uređivanje dela. */
 const fieldOriginal = new WeakMap();
+const pristineArmed = new WeakSet();
+function snapshotField(el){ fieldOriginal.set(el, el.value); }
+function armField(el){
+  const orig = el.value;
+  fieldOriginal.set(el, orig);
+  if(el.dataset.ph == null) el.dataset.ph = el.getAttribute('placeholder') || '';
+  el.setAttribute('placeholder', el.type === 'password' ? '\u2022'.repeat(Math.min(orig.length, 24)) : orig);   /* v3: ključ se ne otkriva */
+  el.value = '';
+  pristineArmed.add(el); el.classList.add('pre-sel');
+}
+function disarmField(el, restore){
+  if(!pristineArmed.has(el)) return;
+  pristineArmed.delete(el); el.classList.remove('pre-sel');
+  if(el.dataset.ph != null) el.setAttribute('placeholder', el.dataset.ph);
+  if(restore && el.value === '') el.value = fieldOriginal.get(el) || '';
+}
 function wireBackspace(el, prev){
   if(!el || el._bsWired) return;
   el._bsWired = true;
-  let pristine = false, wasFocused = false, restoring = false;
-  const goPrev = ()=>{ if(prev && document.activeElement !== prev) prev.focus(); };
-  const isDelete = (t)=> typeof t === 'string' && t.indexOf('delete') === 0;
-  el.addEventListener('pointerdown', ()=>{ wasFocused = (document.activeElement === el); });
-  el.addEventListener('focus', ()=>{ fieldOriginal.set(el, el.value); try{ el.select(); }catch(e){} pristine = true; });
-  /* namerno bez 'blur': skok nazad skida fokus PRE Gboard-ovog brisanja, a vraćanje teksta tada mora i dalje da radi */
-  el.addEventListener('click', ()=>{ if(wasFocused) pristine = false; wasFocused = false; });
-  el.addEventListener('keydown', (ev)=>{
-    if(ev.key !== 'Backspace') return;
-    if(pristine || el.value === ''){ ev.preventDefault(); goPrev(); }
-  });
-  el.addEventListener('beforeinput', (ev)=>{
-    if(!isDelete(ev.inputType)) return;
-    if(pristine || el.value === ''){ ev.preventDefault(); goPrev(); }
-  });
-  el.addEventListener('input', (ev)=>{
-    if(restoring || !pristine) return;
-    if(isDelete(ev.inputType)){
-      const original = fieldOriginal.get(el);
-      if(typeof original === 'string' && el.value !== original){
-        el.value = original;
-        restoring = true; el.dispatchEvent(new Event('input', { bubbles:true })); restoring = false;   // obrazac dobije vraćenu vrednost
-      }
-      goPrev();
-      return;
+  let wasFocused = false;
+  const goPrev = () => { if(prev) prev.focus(); };
+  el.addEventListener('pointerdown', () => { wasFocused = (document.activeElement === el); });
+  el.addEventListener('focus', () => { if(el.value !== '') armField(el); });
+  /* drugi dodir: stari tekst nazad u polje, kursor na kraj */
+  el.addEventListener('click', () => {
+    if(wasFocused && pristineArmed.has(el)){
+      disarmField(el, true);
+      try{ const n = el.value.length; el.setSelectionRange(n, n); }catch(e){}
     }
-    pristine = false;
+    wasFocused = false;
   });
+  /* izlaz bez unosa: stari tekst se vraća (obrazac je i dalje ima) */
+  el.addEventListener('blur', () => disarmField(el, true));
+  el.addEventListener('keydown', (e) => {
+    if(e.key === 'Backspace' && el.value === ''){ e.preventDefault(); goPrev(); }
+  });
+  el.addEventListener('beforeinput', (e) => {
+    if(e.inputType === 'deleteContentBackward' && el.value === ''){ e.preventDefault(); goPrev(); }
+  });
+  /* prvi upis (slovo ili diktat) u osenčeno polje: senka se skida, ostaje samo novo — kod tekst ne dira */
+  el.addEventListener('input', () => { if(pristineArmed.has(el) && el.value !== '') disarmField(el, false); });
 }
 function wireFormFields(){
   const ids = ['fNaziv','fTip','fKategorija','fDoziranje','fNapomena'];
@@ -2561,7 +2589,7 @@ function renderSettingsTiles(){
 /* v53 — broj dana (upozorenje, bekap, korpa) čuva se SAMO dugmetom „Sačuvaj“ pored polja ili Enter-om, uz obaveštenje gore
    (zajedničko pravilo, prevodilac v99; Zoran 14.10.: tiho čuvanje na svaku cifru zbunjuje). Dugme je bledo dok broj nije nov i
    ispravan (1–365). Izlazak bez čuvanja ne menja ništa: ekran se pri sledećem ulasku crta iz sačuvane vrednosti.
-   Gboard zaštita ostaje wireBackspace (v47), uvezana u setSettingsView. */
+   Gboard zaštita: wireBackspace (modul gboard-backspace v3, v56), uvezana u setSettingsView. */
 function daysFieldHtml(id, val){
   return '<div class="save-row"><input type="text" id="'+id+'" inputmode="numeric" maxlength="3" enterkeyhint="done" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" value="'+val+'">'+
     '<button type="button" class="save-btn save-mini" id="'+id+'Save" disabled>Sačuvaj</button></div>'+
@@ -2744,7 +2772,9 @@ function closeSettings(){
   if(levels){ suppressPopstateCount++; try{ history.go(-levels); }catch(e){ suppressPopstateCount--; } }
 }
 function saveApiKeySetting(){
-  const v = document.getElementById('sApiKey').value.trim();
+  const el = document.getElementById('sApiKey');
+  el.blur();   /* gboard-backspace v3: osenčeno (prazno) polje vraća stari ključ — Enter ne sme da ga obriše */
+  const v = el.value.trim();
   setApiKey(v);
   settingsBack();
   showNote(v ? 'Ključ sačuvan' : 'Ključ obrisan');
