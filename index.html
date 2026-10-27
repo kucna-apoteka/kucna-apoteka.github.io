@@ -1477,7 +1477,7 @@ function confirmDeleteItem(id, swapFromFn){
 
 /* ---------- ADD / EDIT FORM (draft-based, da ne izgubi unos pri osvezavanju zbog fotografije) ---------- */
 const KNOWN_TYPES = ['Lek na recept','Lek bez recepta','Suplement','Vitamin','Krema','Probiotik','Protein'];
-const APP_VERSION = 57; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
+const APP_VERSION = 58; /* svaka objava: +1, isti broj u linku ?v=N i u keš imenu sw.js */
 /* MODUL ai-dnevnik v1 — izvor: Arhiva v174 (Podešavanja → AI obrada: trošak i poslednje obrade, probano 20.10.2026.)
 Upotreba (uz modul gemini v2):
   const log = [], t0 = Date.now();
@@ -1912,7 +1912,8 @@ function aiFormatStatusHtml(){
   if(st.mode!=='format' && st.reasons && st.reasons.length) txt += ' razlog: '+st.reasons.join(' | ');
   return '<div class="field-hint" id="aiFormatHint" style="margin-top:14px;">'+escapeHtml(txt)+'</div>';
 }
-/* MODUL gemini v4 — v4 (Apoteka v57): odgovor zadržava groundingMetadata (izvori pretrage google_search).
+/* MODUL gemini v5 — v5 (Apoteka v58): poruka o grešci sadrži tačan tekst Google-a.
+   v4 (Apoteka v57): odgovor zadržava groundingMetadata (izvori pretrage google_search).
    v3 — izvor: Arhiva v173–174 (brzina AI, probano na telefonu 20.10.2026.); v3: Troškovi v40 (20.10.2026.)
 Isti poziv kao v1: geminiFetch([glavni, rezervni], body, timeoutMs[, think[, log]]) → Response u obliku generateContent
 (resp.ok / resp.status / resp.json()), pa ostatak aplikacije ostaje isti. Greške kroz geminiHttpError.
@@ -2035,8 +2036,10 @@ function geminiFetch(models, body, timeoutMs, think, log){
     const end = ()=>{
       const e = hardErr || lastErr;
       if(e && e.st !== 'T') return finish(()=>{
-        if(e.st === 429 && !hardErr) reject(new Error('Google AI je trenutno odbio zahtev zbog ograničenja broja zahteva na tvom nalogu (i na rezervnom modelu). Sačekaj malo pa probaj ponovo.'));
-        else if(GEMINI_RETRY_STATUS.indexOf(e.st) >= 0 && !hardErr) reject(new Error('Google AI je trenutno preopterećen. Aplikacija je pokušala ' + tries + ' puta, i sa rezervnim modelom. Probaj ponovo za par minuta.'));
+        /* v5: uz našu poruku ide i tačan tekst Google-a (v4 ga je sakrivao — pouka Apoteka v57: 429 nije uvek „sačekaj malo“) */
+        const gt = e.txt ? ' Poruka Google-a: ' + geminiErrorText(e.txt).slice(0, 220) : '';
+        if(e.st === 429 && !hardErr) reject(new Error('Google AI je odbio zahtev (429 – ograničenje na tvom nalogu, i na rezervnom modelu).' + gt));
+        else if(GEMINI_RETRY_STATUS.indexOf(e.st) >= 0 && !hardErr) reject(new Error('Google AI je trenutno preopterećen (' + e.st + '). Aplikacija je pokušala ' + tries + ' puta, i sa rezervnim modelom. Probaj ponovo za par minuta.' + gt));
         else { e.res.geminiModel = e.m; resolve(e.res); }
       });
       if(e) return finish(()=>reject(new Error('Server nije odgovorio na vreme. Proveri internet i probaj ponovo.')));
@@ -2694,7 +2697,11 @@ async function fetchInternetInfo(id){
     it.internetInfo = result;
     persistItems();
   } catch(err){
-    showBanner(err && err.message ? err.message : 'Greška pri pretrazi interneta.');
+    /* v58: zvanični cenovnik (ai.google.dev/gemini-api/docs/pricing, 27.10.2026): pretraga na internetu (Grounding with Google
+       Search) NIJE dostupna na besplatnom nivou — zato uz 429 ide i ta napomena (Zoran 27.10.: dugme ostaje). */
+    let msg = err && err.message ? err.message : 'Greška pri pretrazi interneta.';
+    if(/\(429/.test(msg)) msg += ' Napomena: sa besplatnim Gemini ključem Google ne dozvoljava pretragu na internetu (samo uz plaćeni nalog).';
+    showBanner(msg);
   }
   internetSearchLoadingId = null;
   renderDetail();
