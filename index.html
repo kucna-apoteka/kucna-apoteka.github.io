@@ -2700,7 +2700,7 @@ async function fetchInternetInfo(id){
     /* v58: zvanični cenovnik (ai.google.dev/gemini-api/docs/pricing, 27.10.2026): pretraga na internetu (Grounding with Google
        Search) NIJE dostupna na besplatnom nivou — zato uz 429 ide i ta napomena (Zoran 27.10.: dugme ostaje). */
     let msg = err && err.message ? err.message : 'Greška pri pretrazi interneta.';
-    if(/\(429/.test(msg)) msg += ' Napomena: sa besplatnim Gemini ključem Google ne dozvoljava pretragu na internetu (samo uz plaćeni nalog).';
+    if(/\(429/.test(msg)) msg = 'Sa besplatnim Gemini ključem Google ne dozvoljava pretragu na internetu (samo uz plaćeni nalog). ' + msg;   /* napomena prva: obaveštenje prikazuje 3 reda */
     showBanner(msg);
   }
   internetSearchLoadingId = null;
